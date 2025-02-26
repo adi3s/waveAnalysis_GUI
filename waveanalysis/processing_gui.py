@@ -17,15 +17,14 @@ class WaveAnalysisWidget(QWidget):
         self.viewer = viewer
         self.folder_path = folder_path
         self.group_names = group_names
+        self.image_files = []
         self.combined_results = None
         self.threshold_value = None
         self.smooth_value = None
         self.results = {}
-        self.image_files = []
         self.current_image_index = 0
         self.init_ui()
-        self.load_image_files()
-        self.load_next_image()
+        self.load_image()
 
     def init_ui(self):
         """Initialize the user interface."""
@@ -54,7 +53,6 @@ class WaveAnalysisWidget(QWidget):
         pre_processing_layout = QVBoxLayout()
         self.pre_processing_tab.setLayout(pre_processing_layout)
 
-        # Initialize widgets with @magicgui decorators
         self.threshold_widget = magicgui(
             self.threshold,
             call_button="Set Threshold",
@@ -70,7 +68,6 @@ class WaveAnalysisWidget(QWidget):
         self.wave_speed_widget = magicgui(self.wave_speed, call_button="Calculate Wave Speed")
         self.analyze_widget = magicgui(self.analyze, call_button="Analyze")
 
-        # Grouping buttons in group boxes for better appearance
         threshold_smoothing_group_box = QGroupBox("Apply")
         threshold_smoothing_layout = QVBoxLayout()
         threshold_smoothing_layout.addWidget(self.threshold_widget.native)
@@ -84,7 +81,6 @@ class WaveAnalysisWidget(QWidget):
         correlation_peak_wave_speed_layout.addWidget(self.wave_speed_widget.native)
         correlation_peak_wave_speed_group_box.setLayout(correlation_peak_wave_speed_layout)
 
-        # Adding group boxes and analyze button to the main layout
         pre_processing_layout.addWidget(threshold_smoothing_group_box)
         pre_processing_layout.addWidget(correlation_peak_wave_speed_group_box)
         pre_processing_layout.addWidget(self.analyze_widget.native)
@@ -121,7 +117,6 @@ class WaveAnalysisWidget(QWidget):
         workflow_layout.addWidget(workflow_group_box)
         self.workflow_parameters_layout = QVBoxLayout()
         workflow_layout.addLayout(self.workflow_parameters_layout)
-        # Manually trigger parameter update for initial index
         self.update_workflow_parameters(0)
 
     def update_workflow_parameters(self, index):
@@ -157,7 +152,6 @@ class WaveAnalysisWidget(QWidget):
             ax = plot_canvas.figure.add_subplot(111)
             ax.set_title(f"{self.workflow_combo.currentText()} Workflow - {parameter} Plot")
 
-            # Plot the results for the selected parameter
             if parameter in self.results:
                 ax.plot(self.results[parameter], label=parameter)
 
@@ -178,48 +172,75 @@ class WaveAnalysisWidget(QWidget):
         print(f"Smooth button clicked with value: {smooth_value}")
         self.smooth_value = smooth_value
 
+    def load_image(self):
+        """Load the entire TIFF stack and clear previous image layers while retaining and clearing ROI shapes."""
+        self.image_files = [
+            os.path.join(self.folder_path, f) 
+            for f in sorted(os.listdir(self.folder_path))
+            if f.lower().endswith((".tif", ".tiff")) 
+            and any(group in f for group in self.group_names)
+        ]
+
+        if self.current_image_index < len(self.image_files):
+            img_path = self.image_files[self.current_image_index]
+            image_data = tiff.imread(img_path)
+            
+            # Remove previous image layers
+            for layer in list(self.viewer.layers):
+                if isinstance(layer, napari.layers.Image):
+                    self.viewer.layers.remove(layer)
+            
+            # Clear existing ROI shapes from all shapes layers
+            for layer in self.viewer.layers:
+                if isinstance(layer, napari.layers.Shapes):
+                    layer.data = []
+
+            # Add new image layer
+            image_layer = self.viewer.add_image(image_data, name=os.path.basename(img_path))
+            self.viewer.reset_view()
+            self.viewer.layers.move(self.viewer.layers.index(image_layer), 0)
+        else:
+            print("Analysis complete.")
+            self.viewer.close()
+
     def analyze(self):
-        """Analyze the images."""
+        """Analyze images and load next TIFF."""
         print("Analyze button clicked")
-        image_layers = [layer for layer in self.viewer.layers if isinstance(layer, napari.layers.Image)]
-        for layer in image_layers:
-            data = layer.data
-            print(f"Processing image: {layer.name}")
-        print("Saving results...")
-        self.viewer.layers.clear()
-        self.load_next_image()
+        if self.current_image_index < len(self.image_files):
+            self.current_image_index += 1
+            self.load_image()  # Loads next image and clears previous image/ROI shapes
+        else:
+            print("No more images.")
+            self.viewer.close()
 
     def correlation(self):
         """Calculate correlation parameters."""
         print("Correlation button clicked")
-        self.results['indv_ACF'] = sp.calc_indv_ACF_workflow(self.viewer.layers[0].data, self.threshold_value, self.smooth_value)
-        self.results['indv_period'] = sp.calc_indv_period_workflow(self.viewer.layers[0].data, self.threshold_value, self.smooth_value)
-        self.results['indv_CCF'] = sp.calc_indv_CCF_workflow(self.viewer.layers[0].data, self.threshold_value, self.smooth_value)
-        self.results['indv_shift'] = sp.calc_indv_shift_workflow(self.viewer.layers[0].data, self.threshold_value, self.smooth_value)
+        current_data = self.viewer.layers[0].data
+        self.results['indv_ACF'] = sp.calc_indv_ACF_workflow(current_data, self.threshold_value, self.smooth_value)
+        self.results['indv_period'] = sp.calc_indv_period_workflow(current_data, self.threshold_value, self.smooth_value)
+        self.results['indv_CCF'] = sp.calc_indv_CCF_workflow(current_data, self.threshold_value, self.smooth_value)
+        self.results['indv_shift'] = sp.calc_indv_shift_workflow(current_data, self.threshold_value, self.smooth_value)
         self.update_post_processing_tab()
 
     def peak(self):
         """Calculate peak parameters."""
         print("Peak button clicked")
-        self.results['indv_peak'] = sp.calc_indv_peak_props_workflow(self.viewer.layers[0].data, self.threshold_value, self.smooth_value)
-        self.results['indv_peak_rolling'] = sp.calc_indv_peak_props_rolling(self.viewer.layers[0].data)
+        current_data = self.viewer.layers[0].data
+        self.results['indv_peak'] = sp.calc_indv_peak_props_workflow(current_data, self.threshold_value, self.smooth_value)
+        self.results['indv_peak_rolling'] = sp.calc_indv_peak_props_rolling(current_data)
         self.update_post_processing_tab()
 
     def wave_speed(self):
         """Calculate wave speed parameters."""
         print("Wave Speed button clicked")
-        self.results['wave_speed'] = sp.calculate_wave_speed(self.viewer.layers[0].data, self.threshold_value, self.smooth_value)
+        current_data = self.viewer.layers[0].data
+        self.results['wave_speed'] = sp.calculate_wave_speed(current_data, self.threshold_value, self.smooth_value)
         self.update_post_processing_tab()
 
     def update_post_processing_tab(self):
-        """Update the post-processing tab with the results."""
+        """Update the post-processing tab with results."""
         self.output_table.setRowCount(len(self.results))
         for row, (key, value) in enumerate(self.results.items()):
             self.output_table.setItem(row, 0, QTableWidgetItem(key))
             self.output_table.setItem(row, 1, QTableWidgetItem(str(value)))
-
-# if __name__ == "__main__":
-#     napari_viewer = napari.Viewer()
-#     wave_analysis_widget = WaveAnalysisWidget(napari_viewer, folder_path, group_names)
-#     napari_viewer.window.add_dock_widget(wave_analysis_widget, area='right')
-#     napari.run()
