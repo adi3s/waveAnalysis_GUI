@@ -3,6 +3,9 @@ import tkinter as tk
 from tkinter import ttk
 from tkinter.filedialog import askdirectory
 
+from waveanalysis.processing_gui import WaveAnalysisWidget
+import napari
+
 class BaseGUI(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -166,6 +169,21 @@ class BaseGUI(tk.Tk):
         # destroy the widget
         self.destroy()
 
+        # Start Napari viewer and Processing GUI
+        viewer = napari.Viewer()
+        plot_params = {
+            "plot_summary_ACFs": self.plot_summary_ACFs,
+            "plot_summary_CCFs": self.plot_summary_CCFs,
+            "plot_summary_peaks": self.plot_summary_peaks,
+            "plot_indv_ACFs": self.plot_indv_ACFs,
+            "plot_indv_CCFs": self.plot_indv_CCFs,
+            "plot_indv_peaks": self.plot_indv_peaks
+        }
+        processing_gui = WaveAnalysisWidget(viewer, self.folder_path, "standard", self.group_names, self.box_size, self.bin_shift, self.acf_peak_thresh, plot_params=plot_params)
+        viewer.window.add_dock_widget(processing_gui, area="right")
+
+        napari.run()
+
 class RollingGUI(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -292,6 +310,18 @@ class RollingGUI(tk.Tk):
 
         # destroy the widget
         self.destroy()
+
+        # Start Napari viewer and Processing GUI
+        viewer = napari.Viewer()
+        plot_params = {
+            "plot_sf_ACFs": self.plot_sf_ACFs,
+            "plot_sf_CCFs": self.plot_sf_CCFs,
+            "plot_sf_peaks": self.plot_sf_peaks
+        }
+        processing_gui = WaveAnalysisWidget(viewer, self.folder_path, "rolling", self.box_size, self.box_shift, self.subframe_size, self.subframe_roll, plot_params=plot_params)
+        viewer.window.add_dock_widget(processing_gui, area="right")
+
+        napari.run()
 
 class KymographGUI(tk.Tk):
     def __init__(self):
@@ -452,3 +482,19 @@ class KymographGUI(tk.Tk):
 
         # destroy the widget
         self.destroy()
+
+        # Start Napari viewer and Processing GUI
+        viewer = napari.Viewer()
+        plot_params = {
+            "plot_summary_ACFs": self.plot_summary_ACFs,
+            "plot_summary_CCFs": self.plot_summary_CCFs,
+            "plot_summary_peaks": self.plot_summary_peaks,
+            "plot_indv_ACFs": self.plot_indv_ACFs,
+            "plot_indv_CCFs": self.plot_indv_CCFs,
+            "plot_indv_peaks": self.plot_indv_peaks,
+            "calc_wave_speeds": self.calc_wave_speeds
+        }
+        processing_gui = WaveAnalysisWidget(viewer, self.folder_path, "kymograph", self.group_names, self.line_width, self.bin_shift, self.acf_peak_thresh, plot_params=plot_params)
+        viewer.window.add_dock_widget(processing_gui, area="right")
+
+        napari.run()
