@@ -62,6 +62,7 @@ class WaveAnalysisWidget(QWidget):
         self.load_image()
 
     def init_ui(self):
+        """Initialize the user interface."""
         main_layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
         self.roi_manager_tab = QWidget()
@@ -83,12 +84,14 @@ class WaveAnalysisWidget(QWidget):
         self.setLayout(main_layout)
 
     def init_roi_manager_tab(self):
+        """Initialize the ROI Manager tab."""
         roi_layout = QVBoxLayout()
         self.roi_manager_tab.setLayout(roi_layout)
         self.roi_manager = QRoiManager(self.viewer)
         roi_layout.addWidget(self.roi_manager)
 
     def init_pre_processing_tab(self):
+        """Initialize the Pre-Processing tab."""
         pre_proc_layout = QVBoxLayout()
         self.pre_processing_tab.setLayout(pre_proc_layout)
 
@@ -125,6 +128,7 @@ class WaveAnalysisWidget(QWidget):
         pre_proc_layout.addWidget(self.analyze_widget.native)
 
     def init_post_processing_tab(self):
+        """Initialize the Post-Processing tab."""
         post_proc_layout = QVBoxLayout()
         self.post_processing_tab.setLayout(post_proc_layout)
         self.output_table = QTableWidget(10, 4)
@@ -133,6 +137,7 @@ class WaveAnalysisWidget(QWidget):
         post_proc_layout.addWidget(self.output_table)
 
     def init_workflow_tab(self):
+        """Initialize the Workflow tab."""
         workflow_layout = QVBoxLayout()
         self.workflow_tab.setLayout(workflow_layout)
         group_box = QGroupBox("Select Workflow")
@@ -148,6 +153,7 @@ class WaveAnalysisWidget(QWidget):
         self.update_workflow_parameters(0)
 
     def update_workflow_parameters(self, index):
+        """Update the workflow parameters based on the selected workflow."""
         for i in reversed(range(self.workflow_parameters_layout.count())):
             widget = self.workflow_parameters_layout.itemAt(i).widget()
             if widget is not None:
@@ -165,6 +171,7 @@ class WaveAnalysisWidget(QWidget):
                                            "Wave Speeds"])
 
     def add_parameter_checkboxes(self, parameters):
+        """Add checkboxes for the given parameters to the workflow parameters layout."""
         for parameter in parameters:
             checkbox = QCheckBox(parameter)
             checkbox.stateChanged.connect(lambda state, param=parameter: self.update_plot_visibility(param, state))
@@ -174,7 +181,6 @@ class WaveAnalysisWidget(QWidget):
         """Show a QDialog with the corresponding plot when a checkbox is checked."""
         param_key = "calc_wave_speeds" if parameter.lower() == "wave speeds" else f"plot_{parameter.lower().replace(' ', '_')}"
         self.plot_params[param_key] = (state == Qt.Checked)
-        print(f"Updated parameter {param_key} to {self.plot_params[param_key]}")
         if state == Qt.Checked:
             mapping = {
                 "plot_summary_acfs": "mean_acf",
@@ -193,35 +199,18 @@ class WaveAnalysisWidget(QWidget):
                 else:
                     self.show_plot_dialog_message(f"No plot available for {parameter}.\nRun analysis first.", title=parameter)
 
-    def show_plot_dialog(self, fig, title="Plot"):
-        dialog = QDialog(self)
-        dialog.setWindowTitle(title)
-        layout = QVBoxLayout(dialog)
-        canvas = FigureCanvas(fig)
-        layout.addWidget(canvas)
-        dialog.setLayout(layout)
-        dialog.resize(600, 400)
-        dialog.exec_()
-
-    def show_plot_dialog_message(self, message, title="Plot"):
-        dialog = QDialog(self)
-        dialog.setWindowTitle(title)
-        layout = QVBoxLayout(dialog)
-        label = QLabel(message)
-        layout.addWidget(label)
-        dialog.setLayout(layout)
-        dialog.resize(300, 100)
-        dialog.exec_()
-
     def threshold(self, threshold_value: float):
+        """Set the threshold value for ACF peak detection."""
         print(f"Threshold button clicked with value: {threshold_value}")
         self.acf_peak_thresh = threshold_value
 
     def smooth(self, smooth_value: float):
+        """Set the smoothing value for the analysis."""
         print(f"Smooth button clicked with value: {smooth_value}")
         self.smooth_value = smooth_value
 
     def load_image(self):
+        """Load the image based on the current analysis mode and update the viewer."""
         if self.analysis_mode in ("standard", "kymograph"):
             self.image_files = [os.path.join(self.folder_path, f)
                                 for f in sorted(os.listdir(self.folder_path))
@@ -264,21 +253,21 @@ class WaveAnalysisWidget(QWidget):
             image_layer = self.viewer.add_image(image_data, name=os.path.basename(img_path))
             self.viewer.reset_view()
             self.viewer.layers.move(self.viewer.layers.index(image_layer), 0)
-            print(f"Loaded image: {os.path.basename(img_path)}")
         else:
             print("Analysis complete.")
             self.viewer.close()
 
     def get_image_properties(self):
+        """Return the properties of the current image."""
         return self.image_props if self.image_props else {}
 
     def analyze(self):
+        """Analyze the current image and update the results."""
         print("Analyze button clicked")
         if self.current_image_index < len(self.image_files):
             self.current_image_index += 1
             self.load_image()
         else:
-            print("No more images.")
             self.viewer.close()
         if self.analysis_mode == "rolling":
             self.run_rolling_workflow()
@@ -286,7 +275,7 @@ class WaveAnalysisWidget(QWidget):
             self.run_combined_workflow(self.analysis_mode)
 
     def run_combined_workflow(self, analysis_type):
-        print(f"Running Combined Workflow for: {analysis_type}")
+        """Run the combined workflow for the given analysis type."""
         log_params = {
             'Pixel Size': [],
             'Frame Interval': [],
@@ -340,7 +329,7 @@ class WaveAnalysisWidget(QWidget):
         self.update_post_processing_tab()
 
     def run_rolling_workflow(self):
-        print("Running Rolling Workflow")
+        """Run the rolling workflow for the current analysis."""
         log_params = {
             'Box Size(px)': self.box_size,
             'Box Shift(px)': self.bin_shift,
@@ -373,18 +362,19 @@ class WaveAnalysisWidget(QWidget):
         self.update_post_processing_tab()
 
     def correlation(self):
-        print("Correlation button clicked")
+        """Calculate the correlation for the current analysis."""
         self.run_combined_workflow(self.analysis_mode)
 
     def peak(self):
-        print("Peak button clicked")
+        """Detect peaks in the current analysis."""
         self.run_combined_workflow(self.analysis_mode)
 
     def wave_speed(self):
-        print("Wave Speed button clicked")
+        """Calculate the wave speed for the current analysis."""
         self.run_combined_workflow(self.analysis_mode)
 
     def update_post_processing_tab(self):
+        """Update the post-processing tab with the results of the analysis."""
         self.output_table.clearContents()
         row_count = 0
         for result_type, result_data in self.results.items():
@@ -414,7 +404,7 @@ class WaveAnalysisWidget(QWidget):
             self.output_table.setRowCount(1)
         else:
             self.output_table.setRowCount(row_count)
-        print(f"Updated results table with {row_count} rows")
 
     def get_num_channels(self):
+        """Return the number of channels in the current image."""
         return self.image_props.get("num_channels", 1)
