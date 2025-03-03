@@ -8,8 +8,9 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from napari_roi_manager import QRoiManager
 import os
 import tifffile as tiff
+import pandas as pd
 
-# Import from the new organized files
+# Imports the files
 from waveanalysis.signal_processing import correlation_functions, peak_properties, wave_speed
 from waveanalysis.plotting import group_plotting, indv_plot_creation, mean_plot_creation, rolling_plot_creation
 from waveanalysis.data_workflows import combined_workflow, rolling_workflow
@@ -33,6 +34,7 @@ class WaveAnalysisWidget(QWidget):
         self.folder_path = folder_path
         self.analysis_mode = analysis_mode.lower()
         self.plot_params = plot_params
+        self.smooth_value = 0.0  # Default smoothing value
 
         if self.analysis_mode == "standard":
             self.group_names = args[0]
@@ -44,8 +46,7 @@ class WaveAnalysisWidget(QWidget):
             self.bin_shift = args[1]
             self.subframe_size = args[2]
             self.subframe_roll = args[3]
-            self.group_names = []  # not used in rolling mode
-            self.acf_peak_thresh = 0.1  
+            self.group_names = []  # not used in rolling mode 
         elif self.analysis_mode == "kymograph":
             self.group_names = args[0]
             self.line_width = args[1]
@@ -55,7 +56,15 @@ class WaveAnalysisWidget(QWidget):
             raise ValueError("Invalid analysis mode specified")
 
         self.image_files = []
-        self.results = {}
+        # Initialize results dictionary with empty values
+        self.results = {
+            "auto_correlation": {},
+            "cross_correlation": {},
+            "period": {},
+            "peak": {},
+            "wave_speed": None,
+            "rolling_plots": None
+        }
         self.current_image_index = 0
         self.image_props = {}
         self.init_ui()
@@ -160,15 +169,11 @@ class WaveAnalysisWidget(QWidget):
                 widget.setParent(None)
         self.workflow_parameters_layout.addWidget(QLabel(f"{self.workflow_combo.currentText()} Workflow Parameters"))
         if index == 0:
-            self.add_parameter_checkboxes(["Summary ACFs", "Summary CCFs", "Summary peaks",
-                                           "Individual ACFs", "Individual CCFs", "Individual peaks",
-                                           "Wave Speeds"])
+            self.add_parameter_checkboxes(["Individual ACFs", "Individual CCFs", "Individual peaks", "Wave Speeds"])
         elif index == 1:
             self.add_parameter_checkboxes(["Period", "Amplitude", "Maximum", "Minimum", "Width", "Shift"])
         elif index == 2:
-            self.add_parameter_checkboxes(["Summary ACFs", "Summary CCFs", "Summary peaks",
-                                           "Individual ACFs", "Individual CCFs", "Individual peaks",
-                                           "Wave Speeds"])
+            self.add_parameter_checkboxes(["Individual ACFs", "Individual CCFs", "Individual peaks", "Wave Speeds"])
 
     def add_parameter_checkboxes(self, parameters):
         """Add checkboxes for the given parameters to the workflow parameters layout."""
@@ -183,21 +188,48 @@ class WaveAnalysisWidget(QWidget):
         self.plot_params[param_key] = (state == Qt.Checked)
         if state == Qt.Checked:
             mapping = {
-                "plot_summary_acfs": "mean_acf",
-                "plot_summary_ccfs": "mean_ccf",
-                "plot_summary_peaks": "mean_peaks",
-                "plot_indv_acfs" : "indv_acf",
-                "plot_indv_ccfs" : "indv_ccf",
-                "plot_indv_peaks" : "indv_peak",
+                "plot_indv_acfs": "auto_correlation",
+                "plot_indv_ccfs": "cross_correlation",
+                "plot_indv_peaks": "peak",
                 "calc_wave_speeds": "wave_speed"
             }
             if param_key in mapping:
                 result_key = mapping[param_key]
-                if result_key in self.results:
+                if result_key in self.results and self.results[result_key]:
                     fig = self.results[result_key]
                     self.show_plot_dialog(fig, title=parameter)
                 else:
                     self.show_plot_dialog_message(f"No plot available for {parameter}.\nRun analysis first.", title=parameter)
+
+    def show_plot_dialog(self, fig, title):
+        """Show a dialog with the given plot."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        layout = QVBoxLayout()
+        if isinstance(fig, dict):
+            # If fig is a dictionary, show the first plot
+            if fig:
+                first_key = next(iter(fig))
+                canvas = FigureCanvas(fig[first_key])
+                layout.addWidget(canvas)
+            else:
+                layout.addWidget(QLabel("No plot available"))
+        elif isinstance(fig, plt.Figure):
+            canvas = FigureCanvas(fig)
+            layout.addWidget(canvas)
+        else:
+            layout.addWidget(QLabel(str(fig)))
+        dialog.setLayout(layout)
+        dialog.exec_()
+
+    def show_plot_dialog_message(self, message, title):
+        """Show a dialog with the given message."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel(message))
+        dialog.setLayout(layout)
+        dialog.exec_()
 
     def threshold(self, threshold_value: float):
         """Set the threshold value for ACF peak detection."""
@@ -254,7 +286,6 @@ class WaveAnalysisWidget(QWidget):
             self.viewer.reset_view()
             self.viewer.layers.move(self.viewer.layers.index(image_layer), 0)
         else:
-            print("Analysis complete.")
             self.viewer.close()
 
     def get_image_properties(self):
@@ -265,14 +296,18 @@ class WaveAnalysisWidget(QWidget):
         """Analyze the current image and update the results."""
         print("Analyze button clicked")
         if self.current_image_index < len(self.image_files):
+            img_path = self.image_files[self.current_image_index]
+            print(f"Analyzing image: {img_path}")
+            
+            if self.analysis_mode == "rolling":
+                self.run_rolling_workflow()
+            else:
+                self.run_combined_workflow(self.analysis_mode)
+                
             self.current_image_index += 1
             self.load_image()
         else:
             self.viewer.close()
-        if self.analysis_mode == "rolling":
-            self.run_rolling_workflow()
-        else:
-            self.run_combined_workflow(self.analysis_mode)
 
     def run_combined_workflow(self, analysis_type):
         """Run the combined workflow for the given analysis type."""
@@ -282,51 +317,84 @@ class WaveAnalysisWidget(QWidget):
             'Errors': [],
             'Files Not Processed': []
         }
-        results_df = combined_workflow(
-            folder_path=self.folder_path,
-            group_names=self.group_names,
-            log_params=log_params,
-            analysis_type=analysis_type,
-            acf_peak_thresh=self.acf_peak_thresh,
-            plot_summary_ACFs=self.plot_params.get("plot_summary_acfs", True),
-            plot_summary_CCFs=self.plot_params.get("plot_summary_ccfs", True),
-            plot_summary_peaks=self.plot_params.get("plot_summary_peaks", True),
-            plot_indv_ACFs=self.plot_params.get("plot_indv_acfs", False),
-            plot_indv_CCFs=self.plot_params.get("plot_indv_ccfs", False),
-            plot_indv_peaks=self.plot_params.get("plot_indv_peaks", False),
-            calc_wave_speeds=self.plot_params.get("calc_wave_speeds", False),
-            plot_wave_speeds=False,
-            box_size=self.box_size if self.analysis_mode=="standard" else None,
-            bin_shift=self.bin_shift,
-            line_width=self.line_width if self.analysis_mode=="kymograph" else None,
-            test=False
-        )
-        if results_df is not None:
+        
+        # Set appropriate parameters based on analysis type
+        kwargs = {
+            'folder_path': self.folder_path,
+            'group_names': self.group_names,
+            'log_params': log_params,
+            'analysis_type': analysis_type,
+            'acf_peak_thresh': self.acf_peak_thresh,
+            'plot_indv_ACFs': self.plot_params.get("plot_indv_acfs", False),
+            'plot_indv_CCFs': self.plot_params.get("plot_indv_ccfs", False),
+            'plot_indv_peaks': self.plot_params.get("plot_indv_peaks", False),
+            'calc_wave_speeds': self.plot_params.get("calc_wave_speeds", False),
+            'plot_summary_ACFs': self.plot_params.get("plot_summary_acfs", False),
+            'plot_summary_CCFs': self.plot_params.get("plot_summary_ccfs", False),
+            'plot_summary_peaks': self.plot_params.get("plot_summary_peaks", False),
+            'plot_wave_speeds': False,
+            'bin_shift': self.bin_shift
+        }
+        
+        # Add appropriate parameters based on analysis mode
+        if analysis_type == "standard":
+            kwargs['box_size'] = self.box_size
+        elif analysis_type == "kymograph":
+            kwargs['line_width'] = self.line_width
+        
+        # Run the workflow
+        results_df = combined_workflow(**kwargs)
+        
+        if results_df is not None and not results_df.empty:
             # Update image properties with binning parameters
             image_props = self.get_image_properties()
             image_props['step'] = self.bin_shift
+            
             if analysis_type == "standard":
                 image_props['box_size'] = self.box_size
             elif analysis_type == "kymograph":
                 image_props['line_width'] = self.line_width
-            # Compute num_bins using the appropriate function:
-            if analysis_type == "kymograph":
-                _, num_bins = image_bin_calc.create_kymo_bin_array(results_df, image_props)
-            else:
-                _, num_bins, _, _ = image_bin_calc.create_multi_frame_bin_array(results_df, image_props)
-            image_props['num_bins'] = num_bins
-
-            pixel_size = image_props["pixel_size"][0]
-            frame_interval = image_props["frame_interval"]
-
-            self.results["correlation"] = correlation_functions.calc_indv_ACF_workflow(results_df, image_props)
-            self.results["peak"] = peak_properties.calc_indv_peak_props_workflow(results_df, image_props)
-            self.results["wave_speed"] = wave_speed.calc_wave_speeds(results_df, pixel_size, frame_interval)
-            self.results["group_plots"] = group_plotting.generate_group_comparison(results_df, {})
-            self.results["mean_acf"] = mean_plot_creation.plot_mean_ACF_workflow({}, image_props, self.results["correlation"])
-            self.results["mean_ccf"] = mean_plot_creation.plot_mean_CCF_workflow({}, image_props, self.results["correlation"])
-            self.results["mean_peaks"] = mean_plot_creation.plot_mean_peak_props_workflow({}, image_props)
-        self.update_post_processing_tab()
+                
+            # Compute num_bins using the appropriate function
+            try:
+                if analysis_type == "kymograph":
+                    _, num_bins = image_bin_calc.create_kymo_bin_array(results_df, image_props)
+                else:
+                    _, num_bins, _, _ = image_bin_calc.create_multi_frame_bin_array(results_df, image_props)
+                image_props['num_bins'] = num_bins
+            except Exception as e:
+                print(f"Error calculating num_bins: {e}")
+                image_props['num_bins'] = 10  # Default value
+            
+            # Get pixel size and frame interval for wave speed calculations
+            pixel_size = image_props.get("pixel_size", [1.0])[0]  # Default to 1.0 if not found
+            frame_interval = image_props.get("frame_interval", 1.0)  # Default to 1.0 if not found
+            
+            try:
+                # Process results
+                self.results["auto_correlation"] = indv_plot_creation.plot_indv_acf_workflow(
+                    results_df, image_props, self.results["auto_correlation"])
+                
+                self.results["cross_correlation"] = indv_plot_creation.plot_indv_ccf_workflow(
+                    results_df, image_props, self.results["cross_correlation"])
+                
+                self.results["period"] = correlation_functions.calc_indv_period_workflow(
+                    results_df, image_props, self.results["period"])
+                
+                self.results["peak"] = indv_plot_creation.plot_indv_peak_workflow(
+                    results_df, image_props, self.results["peak"])
+                
+                if self.plot_params.get("calc_wave_speeds", False):
+                    self.results["wave_speed"] = wave_speed.calc_wave_speeds(
+                        results_df, pixel_size, frame_interval)
+                    
+            except Exception as e:
+                print(f"Error processing results: {e}")
+            
+            # Update the table with the results
+            self.update_post_processing_tab(results_df)
+        else:
+            print("No results returned from combined_workflow")
 
     def run_rolling_workflow(self):
         """Run the rolling workflow for the current analysis."""
@@ -346,6 +414,7 @@ class WaveAnalysisWidget(QWidget):
             'Frame Interval': [],
             'Pixel Size': []
         }
+        
         results_df = rolling_workflow(
             folder_path=self.folder_path,
             log_params=log_params,
@@ -355,53 +424,112 @@ class WaveAnalysisWidget(QWidget):
             roll_by=self.subframe_roll,
             acf_peak_thresh=self.acf_peak_thresh
         )
-        if results_df is not None:
-            self.results["correlation"] = correlation_functions.calc_indv_CCF_workflow(results_df, self.get_image_properties())
-            self.results["peak"] = peak_properties.calc_indv_peak_props_workflow(results_df, self.get_image_properties())
-            self.results["rolling_plots"] = rolling_plot_creation.plot_rolling_summary(self.get_num_channels(), results_df, [])
-        self.update_post_processing_tab()
+        
+        if results_df is not None and not results_df.empty:
+            image_props = self.get_image_properties()
+            try:
+                self.results["auto_correlation"] = indv_plot_creation.plot_indv_acf_workflow(
+                    results_df, image_props, self.results["auto_correlation"])
+                
+                self.results["cross_correlation"] = indv_plot_creation.plot_indv_ccf_workflow(
+                    results_df, image_props, self.results["cross_correlation"])
+                
+                self.results["period"] = correlation_functions.calc_indv_period_workflow(
+                    results_df, image_props, self.results["period"])
+                
+                self.results["peak"] = peak_properties.calc_indv_peak_props_workflow(
+                    results_df, image_props, self.results["peak"])
+                
+                # For rolling analysis, we need to get the number of channels
+                num_channels = self.get_num_channels()
+                self.results["rolling_plots"] = rolling_plot_creation.plot_rolling_summary(
+                    num_channels, results_df, [])
+                
+            except Exception as e:
+                print(f"Error processing rolling results: {e}")
+            
+            # Update the table with the results
+            self.update_post_processing_tab(results_df)
+        else:
+            print("No results returned from rolling_workflow")
 
     def correlation(self):
         """Calculate the correlation for the current analysis."""
-        self.run_combined_workflow(self.analysis_mode)
+        print("Correlation button clicked")
+        try:
+            if self.analysis_mode == "rolling":
+                self.run_rolling_workflow()
+            else:
+                self.run_combined_workflow(self.analysis_mode)
+        except Exception as e:
+            print(f"Error calculating correlation: {e}")
 
     def peak(self):
         """Detect peaks in the current analysis."""
-        self.run_combined_workflow(self.analysis_mode)
+        print("Peak detection button clicked")
+        try:
+            if self.analysis_mode == "rolling":
+                self.run_rolling_workflow()
+            else:
+                self.run_combined_workflow(self.analysis_mode)
+        except Exception as e:
+            print(f"Error detecting peaks: {e}")
 
     def wave_speed(self):
         """Calculate the wave speed for the current analysis."""
-        self.run_combined_workflow(self.analysis_mode)
+        print("Wave speed button clicked")
+        try:
+            # Ensure wave speed calculation is enabled
+            self.plot_params["calc_wave_speeds"] = True
+            
+            if self.analysis_mode == "rolling":
+                self.run_rolling_workflow()
+            else:
+                self.run_combined_workflow(self.analysis_mode)
+        except Exception as e:
+            print(f"Error calculating wave speed: {e}")
 
-    def update_post_processing_tab(self):
+    def update_post_processing_tab(self, results_df=None):
         """Update the post-processing tab with the results of the analysis."""
         self.output_table.clearContents()
         row_count = 0
-        for result_type, result_data in self.results.items():
-            if isinstance(result_data, dict):
-                for param, fig in result_data.items():
-                    fig.show()
-            elif hasattr(result_data, 'iterrows'):
-                for _, row in result_data.iterrows():
-                    if row_count >= self.output_table.rowCount():
-                        self.output_table.setRowCount(row_count + 1)
-                    if 'Image' in row:
-                        self.output_table.setItem(row_count, 0, QTableWidgetItem(str(row['Image'])))
-                    if 'Wave Speed' in row:
-                        self.output_table.setItem(row_count, 1, QTableWidgetItem(str(row['Wave Speed'])))
-                    if 'Correlation' in row:
-                        self.output_table.setItem(row_count, 2, QTableWidgetItem(str(row['Correlation'])))
-                    if 'Peak' in row:
-                        self.output_table.setItem(row_count, 3, QTableWidgetItem(str(row['Peak'])))
-                    row_count += 1
-            else:
+        
+        # If results_df is provided, use it to populate the table
+        if results_df is not None and not results_df.empty:
+            for idx, row in results_df.iterrows():
                 if row_count >= self.output_table.rowCount():
                     self.output_table.setRowCount(row_count + 1)
-                self.output_table.setItem(row_count, 0, QTableWidgetItem(result_type))
-                self.output_table.setItem(row_count, 1, QTableWidgetItem(str(result_data)))
+                
+                # Extract frame/image name
+                if 'Image' in row:
+                    self.output_table.setItem(row_count, 0, QTableWidgetItem(str(row['Image'])))
+                elif 'frame' in row:
+                    self.output_table.setItem(row_count, 0, QTableWidgetItem(str(row['frame'])))
+                else:
+                    self.output_table.setItem(row_count, 0, QTableWidgetItem(f"Frame {idx}"))
+                
+                # Extract wave speed if available
+                if self.results["wave_speed"] is not None:
+                    if isinstance(self.results["wave_speed"], pd.DataFrame):
+                        if idx < len(self.results["wave_speed"]):
+                            wave_speed_val = self.results["wave_speed"].iloc[idx].get('Wave Speed', 'N/A')
+                            self.output_table.setItem(row_count, 1, QTableWidgetItem(str(wave_speed_val)))
+                    else:
+                        self.output_table.setItem(row_count, 1, QTableWidgetItem("N/A"))
+                
+                # Extract correlation and peak data if available
+                if 'ACF_Peak_Height' in row:
+                    self.output_table.setItem(row_count, 2, QTableWidgetItem(str(row['ACF_Peak_Height'])))
+                if 'ACF_Peak_Pos' in row:
+                    self.output_table.setItem(row_count, 3, QTableWidgetItem(str(row['ACF_Peak_Pos'])))
+                
                 row_count += 1
+        
+        # Ensure the table has at least one row
         if row_count == 0:
             self.output_table.setRowCount(1)
+            for col in range(4):
+                self.output_table.setItem(0, col, QTableWidgetItem("No data"))
         else:
             self.output_table.setRowCount(row_count)
 
