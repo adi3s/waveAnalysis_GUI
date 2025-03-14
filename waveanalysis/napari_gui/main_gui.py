@@ -536,3 +536,4 @@ class WaveAnalysisWidget(QWidget):
     def get_num_channels(self):
         """Return the number of channels in the current image."""
         return self.image_props.get("num_channels", 1)
+    
