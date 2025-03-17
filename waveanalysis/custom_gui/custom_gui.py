@@ -3,7 +3,7 @@ import tkinter as tk
 from tkinter import ttk
 from tkinter.filedialog import askdirectory
 
-from waveanalysis.processing_gui import WaveAnalysisWidget
+#from waveanalysis.napari_gui.main_gui import WaveAnalysisWidget
 import napari
 
 class BaseGUI(tk.Tk):

@@ -1,15 +1,22 @@
 import waveanalysis.housekeeping.housekeeping_functions as hf
-from waveanalysis.custom_gui import BaseGUI, RollingGUI, KymographGUI
+#from waveanalysis.custom_gui import BaseGUI, RollingGUI, KymographGUI
+from waveanalysis.napari_gui.main_gui import WaveAnalysisWidget
 from waveanalysis.data_workflows.combined_workflow import combined_workflow
 from waveanalysis.data_workflows.rolling_workflow import rolling_workflow
 
+import napari
 def main():
     '''
     Main function to run the wave analysis GUI and analysis workflows.
     '''
     # make GUI object and display the window
-    gui = BaseGUI()
-    gui.mainloop()
+    # gui = BaseGUI()
+    # gui.mainloop()
+
+    viewer = napari.Viewer()
+    gui = WaveAnalysisWidget(viewer)
+    viewer.window.add_dock_widget(gui, area="right")
+    napari.run()    
 
     # get standard GUI parameters
     box_size = gui.box_size
@@ -29,8 +36,12 @@ def main():
     # if rolling GUI specified, make rolling GUI object and display the window
     if gui.rolling:
         # make GUI object and display the window
-        gui = RollingGUI()
-        gui.mainloop()
+        # gui = RollingGUI()
+        # gui.mainloop()
+
+        gui = WaveAnalysisWidget(viewer)
+        viewer.window.add_dock_widget(gui, area="right")
+        napari.run()
 
         # get GUI parameters
         box_size = gui.box_size
@@ -48,8 +59,12 @@ def main():
     # if kymograph GUI specified, make kymograph GUI object and display the window
     if gui.kymograph:
         # make GUI object and display the window
-        gui = KymographGUI()
-        gui.mainloop()
+        # gui = KymographGUI()
+        # gui.mainloop()
+        gui = WaveAnalysisWidget(viewer)
+        viewer.window.add_dock_widget(gui, area="right")
+        napari.run()
+        
         # get GUI parameters
         folder_path = gui.folder_path
         plot_summary_CCFs = gui.plot_summary_CCFs
