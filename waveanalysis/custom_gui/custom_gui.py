@@ -179,8 +179,8 @@ class BaseGUI(tk.Tk):
             "plot_indv_CCFs": self.plot_indv_CCFs,
             "plot_indv_peaks": self.plot_indv_peaks
         }
-        processing_gui = WaveAnalysisWidget(viewer, self.folder_path, "standard", self.group_names, self.box_size, self.bin_shift, self.acf_peak_thresh, plot_params=plot_params)
-        viewer.window.add_dock_widget(processing_gui, area="right")
+        #processing_gui = WaveAnalysisWidget(viewer, self.folder_path, "standard", self.group_names, self.box_size, self.bin_shift, self.acf_peak_thresh, plot_params=plot_params)
+        #viewer.window.add_dock_widget(processing_gui, area="right")
 
         napari.run()
 
