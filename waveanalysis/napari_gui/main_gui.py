@@ -119,23 +119,30 @@ class WaveAnalysisWidget(QWidget):
         return cropped
 
     def process_roi(self, roi_data):
-        """Process ROI and add cropped image to Napari as new layer"""
-        print("Processing ROI...")
+        """Process ROI, save it, and remove other layers from the viewer"""
         cropped_image = self.crop(self.current_image, roi_data)
-        idx = len(self.crops) - 1
-        
-        # Add to Napari viewer with unique name
+
+        current_image_name = os.path.splitext(os.path.basename(self.current_image_path))[0]
+        cropped_layer_name = f"{current_image_name}_crop"
+
         self.viewer.add_image(
             cropped_image,
-            name=f'cropped_{idx}',
+            name=cropped_layer_name,
             scale=self.viewer.layers[os.path.basename(self.current_image_path)].scale  # Inherit scale
         )
-        # Save the cropped image
-        save_filename = os.path.join(self.roi_tab.save_path, f'cropped_{idx}.tif')
+        save_filename = os.path.join(self.roi_tab.save_path, f'{cropped_layer_name}.tif')
         tiff.imwrite(save_filename, cropped_image)
-        # Verify saved image
-        saved_img = tiff.imread(save_filename)
-        print(f"Saved image shape: {saved_img.shape}")
+        print(f"Cropped image saved to: {save_filename}")
+
+        # Remove all other layers except the cropped ROI
+        for layer in list(self.viewer.layers):
+            if layer.name != cropped_layer_name:
+                self.viewer.layers.remove(layer)
+
+        # Update the current image to the cropped ROI
+        self.current_image = cropped_image
+        self.current_image_path = save_filename
+        print(f"Updated current image to cropped ROI: {cropped_layer_name}")
                 
     def run_analysis(self):
         """Execute complete analysis workflow"""
@@ -195,12 +202,6 @@ class WaveAnalysisWidget(QWidget):
         """Run analysis workflow"""
         print(f"Starting analysis on image of shape: {image.shape}")
         analysis_type = params["type"]
-        
-        # Debug image dimensions
-        if len(image.shape) == 3:
-            print(f"3D image: frames/channels={image.shape[0]}, height={image.shape[1]}, width={image.shape[2]}")
-        elif len(image.shape) == 4:
-            print(f"4D image: frames={image.shape[0]}, channels={image.shape[1]}, height={image.shape[2]}, width={image.shape[3]}")
         
         # Setup image properties based on shape and analysis type
         if analysis_type == "kymograph":
