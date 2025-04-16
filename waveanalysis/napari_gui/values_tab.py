@@ -1,8 +1,11 @@
 from qtpy.QtWidgets import *
-from qtpy.QtCore import Qt
+from qtpy.QtCore import Qt, Signal
+import os
 
 class ValuesTab(QWidget):
     """Tab for setting analysis parameters and selecting analysis type"""
+    image_loaded = Signal(str)  # Signal to notify when an image is loaded
+
     def __init__(self, parent):
         """Initialize the ValuesTab with the parent widget"""
         super().__init__(parent)
@@ -14,12 +17,22 @@ class ValuesTab(QWidget):
     def init_ui(self):
         """Initialize the user interface for the ValuesTab"""
         main_layout = QVBoxLayout()
-        
+
+        # Load Image Section
+        self.load_btn = QPushButton("Load Image")
+        self.load_btn.clicked.connect(self.load_image)
+        self.path_label = QLabel("No image loaded")
+        load_layout = QVBoxLayout()
+        load_layout.addWidget(self.load_btn)
+        load_layout.addWidget(self.path_label)
+        load_group = QGroupBox("Image Controls")
+        load_group.setLayout(load_layout)
+
         # Analysis Type Selection
         self.analysis_combo = QComboBox()
         self.analysis_combo.addItems(["Standard", "Rolling", "Kymograph"])
         self.analysis_combo.currentIndexChanged.connect(self.update_visible_params)
-        
+
         # Parameter Groups
         self.standard_params = QGroupBox("Standard Parameters")
         self.rolling_params = QGroupBox("Rolling Parameters")
@@ -32,11 +45,19 @@ class ValuesTab(QWidget):
         main_layout.addWidget(self.rolling_params)
         main_layout.addWidget(self.kymo_params)
         main_layout.addWidget(self.common_params)
+        main_layout.addWidget(load_group)
 
         save_params = QPushButton("Save Parameters")
         save_params.clicked.connect(self.update_visible_params)
         main_layout.addWidget(save_params)
         self.setLayout(main_layout)
+
+    def load_image(self):
+        """Load an image file and emit the path"""
+        path, _ = QFileDialog.getOpenFileName()
+        if path:
+            self.path_label.setText(f"Loaded: {os.path.basename(path)}")
+            self.image_loaded.emit(path)  # Emit the signal with the image path
 
     def setup_parameter_groups(self):
         """Setup the parameter groups for the 3 analysis types"""
