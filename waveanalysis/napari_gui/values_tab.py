@@ -48,7 +48,7 @@ class ValuesTab(QWidget):
         main_layout.addWidget(load_group)
 
         save_params = QPushButton("Save Parameters")
-        save_params.clicked.connect(self.update_visible_params)
+        save_params.clicked.connect(self.save_parameters)
         main_layout.addWidget(save_params)
         self.setLayout(main_layout)
 
