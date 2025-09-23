@@ -32,7 +32,9 @@ def combined_workflow(
     box_size: int = None,
     bin_shift: int = None, 
     line_width: int = None,
-    test: bool = False # for testing purposes
+    roi: np.ndarray = None,
+    test: bool = False, # for testing purposes
+    image_path: str = None  # Add specific image path parameter
 ) -> pd.DataFrame:
     '''
     This is the combined workflow for kymographs and standard analysis. It processes the image files in the 
@@ -75,8 +77,12 @@ def combined_workflow(
     Returns:
     - pd.DataFrame: The summary data for each file.
     '''
-    # list of file names in specified directory
-    file_names = [fname for fname in os.listdir(folder_path) if fname.endswith('.tif') and not fname.startswith('.')]
+    # If specific image path is provided, use that; otherwise use all files in folder
+    if image_path:
+        file_names = [os.path.basename(image_path)]
+        folder_path = os.path.dirname(image_path)
+    else:
+        file_names = [fname for fname in os.listdir(folder_path) if fname.endswith('.tif') and not fname.startswith('.')]
 
     # check for group name errors          
     hf.group_name_error_check(file_names=file_names, group_names=group_names, log_params=log_params)
@@ -139,14 +145,14 @@ def combined_workflow(
 
                 # Create the array of bin values for which all the stats will be calculated
                 if analysis_type == 'standard':
-                    image_array = tiff_to_np_array_multi_frame(image_path)
+                    image_array = tiff_to_np_array_multi_frame(image_path, roi=roi)
                     bin_values, num_bins, _, _ = create_multi_frame_bin_array(image = image_array, 
                                                                                 img_props = img_props_dict)
                     
                     # np.save(f'/Users/domchom/Desktop/{file_name}_bin_values.npy', bin_values)
                                     
                 else: # analysis_type == 'kymograph'
-                    image_array = tiff_to_np_array_single_frame(image_path)
+                    image_array = tiff_to_np_array_single_frame(image_path, roi=roi)
                     bin_values, num_bins = create_kymo_bin_array(image = image_array,
                                                                     img_props = img_props_dict)
                                 

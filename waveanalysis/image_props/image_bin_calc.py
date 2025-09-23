@@ -58,7 +58,8 @@ def create_kymo_bin_array(
 
 def create_multi_frame_bin_array(
     image: np.ndarray,
-    img_props: dict
+    img_props: dict,
+    roi: np.ndarray = None
 ) -> (np.ndarray, int, int, int): # type: ignore
     """
     Create a multi-frame binary array based on the given image and image properties.
@@ -79,8 +80,23 @@ def create_multi_frame_bin_array(
     # Calculate the index for the center of the kernel
     ind = box_size // 2
     
+    # Create a mask if ROI is provided
+    if roi is not None:
+        mask = np.zeros(image.shape[-2:], dtype=bool)
+        mask[roi[:, 1], roi[:, 0]] = True
+        # Expand mask to match image dimensions
+        mask = np.broadcast_to(mask, (num_frames, num_channels) + mask.shape)
+    else:
+        mask = np.ones_like(image[:, 0, :, :], dtype=bool)
+
     # Apply uniform filter to calculate mean signal over specified box size
     box_values = nd.uniform_filter(image[:, 0, :, :, :], size=(1, 1, box_size, box_size))[:, :, ind:-ind:step, ind:-ind:step]
+    
+    # Apply ROI mask to box values
+    if roi is not None:
+        # Resize mask to match box_values dimensions
+        resized_mask = mask[:, :, ind:-ind:step, ind:-ind:step]
+        box_values = np.where(resized_mask, box_values, np.nan)
 
     # Get the dimensions of the resulting mean image
     num_x_bins, num_y_bins = box_values.shape[-2:]

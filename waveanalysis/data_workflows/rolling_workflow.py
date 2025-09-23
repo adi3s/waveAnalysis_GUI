@@ -23,7 +23,9 @@ def rolling_workflow(
     roll_size: int,
     roll_by: int,
     acf_peak_thresh: float,
-    test: bool = False # for testing purposes
+    test: bool = False, # for testing purposes
+    roi: np.ndarray = None,  # Add ROI parameter
+    image_path: str = None  # Add specific image path parameter
 ) -> pd.DataFrame:      
     '''
     This is the workflow for rolling analysis. It processes the image files in the specified folder 
@@ -61,8 +63,12 @@ def rolling_workflow(
     main_save_path = os.path.join(folder_path, f"0_signalProcessing-{now.strftime('%Y%m%d%H%M')}")
     os.makedirs(main_save_path, exist_ok=True) if not test else None
 
-    # list of file names in specified directory
-    file_names = [fname for fname in os.listdir(folder_path) if fname.endswith('.tif') and not fname.startswith('.')]
+    # If specific image path is provided, use that; otherwise use all files in folder
+    if image_path:
+        file_names = [os.path.basename(image_path)]
+        folder_path = os.path.dirname(image_path)
+    else:
+        file_names = [fname for fname in os.listdir(folder_path) if fname.endswith('.tif') and not fname.startswith('.')]
 
     print('Processing files...')
 
@@ -109,7 +115,7 @@ def rolling_workflow(
                     continue
                 
                 # Create the array for which all future processing will be based on
-                image_array = tiff_to_np_array_multi_frame(image_path)
+                image_array = tiff_to_np_array_multi_frame(image_path, roi=roi)
                 bin_values, num_bins, num_x_bins, num_y_bins = create_multi_frame_bin_array(
                                                                     image = image_array,
                                                                     img_props = img_props_dict
