@@ -1,10 +1,10 @@
 import os
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
 from qtpy.QtWidgets import *
 from qtpy.QtCore import Qt, Signal
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+from matplotlib.image import imread
+import pandas as pd
 
 class PostProcessingTab(QWidget):
     """Tab for displaying and exporting analysis results"""
@@ -14,9 +14,11 @@ class PostProcessingTab(QWidget):
     def __init__(self, parent=None):
         super().__init__()
         self.parent = parent
+        self.results_dir = None
         self.results = None
         self.params = None
-        self.canvases = []  # Keep track of all canvases
+        self.canvases = []
+        self.has_roi_results = False
         
         # Main layout
         layout = QVBoxLayout()
@@ -25,12 +27,25 @@ class PostProcessingTab(QWidget):
         self.status_label = QLabel("No results loaded")
         layout.addWidget(self.status_label)
         
-        # Results view area with tabs
-        self.results_tabs = QTabWidget()
-        layout.addWidget(self.results_tabs)
+        # Results view area with a scrollable widget
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         
-        # Controls area in a group box for better visibility
-        controls_group = QGroupBox("Display Controls")
+        # Create a widget to hold all results
+        self.results_widget = QWidget()
+        self.results_layout = QHBoxLayout()
+        self.results_layout.setSpacing(10)  # Add spacing between plots
+        self.results_layout.setContentsMargins(10, 10, 10, 10)  # Add margins
+        self.results_layout.setAlignment(Qt.AlignLeft)  # Align plots to the left
+        
+        self.results_widget.setLayout(self.results_layout)
+        self.scroll_area.setWidget(self.results_widget)
+        layout.addWidget(self.scroll_area)
+        
+        # Controls area
+        controls_group = QGroupBox("Display & Export Controls")
         controls_layout = QHBoxLayout()
         
         # Display options
@@ -38,515 +53,457 @@ class PostProcessingTab(QWidget):
         display_label = QLabel("Display Type:")
         display_label.setStyleSheet("font-weight: bold;")
         display_box.addWidget(display_label)
-        
-        self.display_combo = QComboBox()
-        self.display_combo.addItems(["Summary", "ACF", "CCF", "Period", "Peak Properties"])
-        self.display_combo.currentIndexChanged.connect(self.update_display)
-        display_box.addWidget(self.display_combo)
-        controls_layout.addLayout(display_box)
-        
-        # Figure options
-        figure_box = QVBoxLayout()
-        figure_label = QLabel("Figure Options:")
-        figure_label.setStyleSheet("font-weight: bold;")
-        figure_box.addWidget(figure_label)
-        
-        self.grid_checkbox = QCheckBox("Show Grid")
-        self.grid_checkbox.setChecked(True)
-        self.grid_checkbox.stateChanged.connect(self.update_display)
-        figure_box.addWidget(self.grid_checkbox)
-        
-        controls_layout.addLayout(figure_box)
-        
-        # Export options
+
+        # Export controls
         export_box = QVBoxLayout()
-        export_label = QLabel("Export:")
+        export_label = QLabel("Export Options:")
         export_label.setStyleSheet("font-weight: bold;")
         export_box.addWidget(export_label)
         
-        self.export_btn = QPushButton("Export Results")
-        self.export_btn.setEnabled(False)
-        self.export_btn.clicked.connect(self.export_results)
-        export_box.addWidget(self.export_btn)
+        self.export_combo = QComboBox()
+        self.export_combo.addItems([
+            "All Plots",
+            "Summary Plots Only",
+            "Individual Plots Only"
+        ])
+        export_box.addWidget(self.export_combo)
         
+        export_btn = QPushButton("Export")
+        export_btn.clicked.connect(self.export_plots)
+        export_box.addWidget(export_btn)
+        
+        self.display_combo = QComboBox()
+        self.display_combo.addItems([
+            "ROIs", 
+            "Summary",
+            "ACF Plots",
+            "CCF Plots", 
+            "Peak Properties"
+        ])
+        self.display_combo.currentIndexChanged.connect(self.on_display_type_changed)
+        display_box.addWidget(self.display_combo)
+        
+        # Add individual plot checkbox
+        self.show_individual = QCheckBox("Show Individual Plots")
+        self.show_individual.stateChanged.connect(self.on_show_individual_changed)
+        self.show_individual.setVisible(False)  # Only show for plot types that support it
+        display_box.addWidget(self.show_individual)
+        
+        # Add ROI selector
+        self.roi_selector = QComboBox()
+        self.roi_selector.addItem("All ROIs")
+        self.roi_selector.setVisible(False)  # Hidden by default
+        self.roi_selector.currentIndexChanged.connect(self.on_roi_selection_changed)
+        display_box.addWidget(self.roi_selector)
+        
+        controls_layout.addLayout(display_box)
         controls_layout.addLayout(export_box)
-        
-        # Stretch to push controls to the left
-        controls_layout.addStretch(1)
         
         controls_group.setLayout(controls_layout)
         layout.addWidget(controls_group)
-        
         self.setLayout(layout)
-        
-    def show_results(self, results, params):
-        """Display analysis results in the tab"""
-        if not results or len(results) == 0:
-            self.status_label.setText("No valid results to display")
+
+    def set_results_directory(self, results_dir):
+        """Set the directory where the results are stored."""
+        if isinstance(results_dir, str) and os.path.isdir(results_dir):
+            self.results_dir = results_dir
+            print(f"Results directory set to: {self.results_dir}")
+        else:
+            print(f"Invalid results directory: {results_dir}")
+            self.results_dir = None
+
+    def show_results(self, results=None, params=None):
+        """Display processed images or data from the results directory."""
+        if isinstance(results, pd.DataFrame):
+            self.results = results
+            # Update ROI information
+            self.has_roi_results = True
+            if self.parent and hasattr(self.parent, 'crops') and self.parent.crops:
+                # Update ROI selector with actual ROI information
+                self.roi_selector.clear()
+                self.roi_selector.addItem("All ROIs")
+                for i in range(len(self.parent.crops)):
+                    self.roi_selector.addItem(f"ROI_{i+1}")
+                self.roi_selector.setVisible(True)
+                print(f"Added {len(self.parent.crops)} ROIs to selector")
+            else:
+                self.has_roi_results = False
+                self.roi_selector.setVisible(False)
+        if isinstance(params, dict):
+            self.params = params
+
+        if not isinstance(self.results_dir, str) or not os.path.exists(self.results_dir):
+            QMessageBox.warning(self, "Error", "Invalid or missing results directory.")
+            print(f"Current results directory: {self.results_dir}")
             return
             
-        self.results = results
-        self.params = params
-        self.canvases = []  # Clear canvas references
+        print(f"Looking for results in: {self.results_dir}")
+
+        # Clear existing widgets from the layout while preserving the original files
+        while self.results_layout.count() > 0:
+            item = self.results_layout.takeAt(0)
+            if item.widget():
+                widget = item.widget()
+                widget.setParent(None)  # Detach from layout without deleting
+                widget.deleteLater()  # Schedule for deletion after display is updated
         
-        # Clear existing tabs
-        while self.results_tabs.count() > 0:
-            self.results_tabs.removeTab(0)
-        
-        # Update status
-        self.status_label.setText(f"Displaying {len(results)} result set(s)")
-        
-        # Process each result
-        for i, result in enumerate(results):
-            # Create a summary tab
-            try:
-                # Extract all height values and flatten them
-                all_heights = []
-                if 'peak_props' in result and len(result['peak_props']) > 0:
-                    for p in result['peak_props'][-1].values():
-                        if 'heights' in p and p['heights'] is not None:
-                            # Check if heights is a list/array and extend
-                            if isinstance(p['heights'], (list, np.ndarray)):
-                                all_heights.extend(p['heights'])
-                            else:
-                                all_heights.append(p['heights'])
-                
-                # Calculate mean if we have heights
-                peak_amplitude = np.nanmean(all_heights) if all_heights else np.nan
-            except Exception as e:
-                print(f"Error calculating peak amplitude: {str(e)}")
-                peak_amplitude = np.nan
-            
-            # Build summary dictionary with more robust error handling
-            summary = {
-                "Analysis Type": params.get("type", "Unknown"),
-                "Period": np.nanmean(result.get("period", [np.nan])) if isinstance(result.get("period", []), (list, np.ndarray)) else np.nan,
-                "Peak Amplitude": peak_amplitude,
-            }
-            
-            # Add wave speed if available
-            if "wave_speed" in result:
-                summary["Wave Speed"] = np.nanmean(result["wave_speed"]) if isinstance(result["wave_speed"], (list, np.ndarray)) else result["wave_speed"]
-                
-            # Create summary tab with improved styling
-            summary_tab = QWidget()
-            summary_layout = QVBoxLayout()
-            
-            # Add a title for the summary
-            title_label = QLabel(f"Analysis Result {i+1}")
-            title_label.setStyleSheet("font-size: 14pt; font-weight: bold;")
-            summary_layout.addWidget(title_label)
-            
-            # Create summary table with better visibility
-            table = QTableWidget(len(summary), 2)
-            table.setHorizontalHeaderLabels(["Metric", "Value"])
-            table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-            table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-            table.setAlternatingRowColors(True)
-            
-            for row, (key, value) in enumerate(summary.items()):
-                metric_item = QTableWidgetItem(key)
-                metric_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-                table.setItem(row, 0, metric_item)
-                
-                # Format numerical values to 3 decimal places for better readability
-                if isinstance(value, (int, float)) and not np.isnan(value):
-                    formatted_value = f"{value:.3f}"
-                elif np.isnan(value):
-                    formatted_value = "N/A"
-                else:
-                    formatted_value = str(value)
-                    
-                value_item = QTableWidgetItem(formatted_value)
-                value_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                table.setItem(row, 1, value_item)
-            
-            # Make sure the table is visible and sized properly
-            table.setMinimumHeight(len(summary) * 30 + 50)  # Allow space for headers and rows
-            summary_layout.addWidget(table)
-            
-            # Add notes about data quality if needed
-            if np.isnan(summary["Period"]):
-                note_label = QLabel("Note: Some data values could not be calculated")
-                note_label.setStyleSheet("color: red;")
-                summary_layout.addWidget(note_label)
-                
-            summary_layout.addStretch(1)  # Add stretch to keep everything at the top
-            summary_tab.setLayout(summary_layout)
-            
-            # Create visualization tabs with improved visibility
-            figure_tab = QWidget()
-            figure_layout = QVBoxLayout()
-            
-            # Create matplotlib figure for plots with better sizing
-            fig = Figure(figsize=(10, 8), dpi=100)
-            canvas = FigureCanvas(fig)
-            figure_layout.addWidget(canvas)
-            self.canvases.append(canvas)  # Keep reference to canvas
-            
-            # Plot ACF as default with better visibility
-            if "acf" in result and result["acf"] is not None:
-                ax = fig.add_subplot(111)
-                
-                # Check data shape and handle appropriately
-                mean_acf = np.array(result["acf"])
-                if mean_acf.ndim > 2:  # If we have channels, bins, etc.
-                    mean_acf = np.nanmean(mean_acf, axis=1)
-                
-                # Ensure we have valid data to plot
-                if mean_acf.size > 0:
-                    # Plot each channel if multiple exist
-                    for ch_idx in range(mean_acf.shape[0] if mean_acf.ndim > 1 else 1):
-                        if mean_acf.ndim > 1:
-                            y_data = mean_acf[ch_idx]
-                        else:
-                            y_data = mean_acf
-                            
-                        # Check for NaN or infinite values
-                        if np.any(np.isfinite(y_data)):
-                            ax.plot(y_data, linewidth=2, label=f"Channel {ch_idx}")
-                
-                ax.set_title("Average Auto-Correlation Function", fontsize=14)
-                ax.set_xlabel("Lag", fontsize=12)
-                ax.set_ylabel("Correlation", fontsize=12)
-                ax.tick_params(axis='both', which='major', labelsize=10)
-                ax.grid(True)
-                ax.legend(fontsize=10)
-                
-                fig.tight_layout()
-                canvas.draw()
-                
-            figure_tab.setLayout(figure_layout)
-            
-            # Add the tabs with clear titles
-            self.results_tabs.addTab(summary_tab, f"Summary {i+1}")
-            self.results_tabs.addTab(figure_tab, f"Plots {i+1}")
-        
-        # Enable export button if we have results
-        self.export_btn.setEnabled(len(results) > 0)
-        
-    def update_display(self):
-        """Change the displayed visualization based on selection with improved visibility"""
-        if not self.results:
-            return
-            
+        # Clear the stored canvas references (doesn't affect original files)
+        self.canvases.clear()
+
+        # Locate processed files based on the selected display type
         display_type = self.display_combo.currentText()
-        show_grid = self.grid_checkbox.isChecked()
+        print(f"\nShowing results for display type: {display_type}")
+        if hasattr(self, 'show_individual'):
+            print(f"Show Individual Plots checkbox state: {self.show_individual.isChecked()}")
         
-        # Find visualization tabs and update them
-        for i in range(self.results_tabs.count()):
-            tab_text = self.results_tabs.tabText(i)
-            if "Plots" in tab_text:
-                idx = int(tab_text.split()[-1]) - 1
-                if idx < len(self.results):
-                    result = self.results[idx]
-                    
-                    # Get the tab widget
-                    tab = self.results_tabs.widget(i)
-                    canvas = None
-                    
-                    # Find the canvas in the tab
-                    for child in tab.children():
-                        if isinstance(child, FigureCanvas):
-                            canvas = child
-                            break
-                    
-                    if canvas:
-                        # Clear the figure
-                        fig = canvas.figure
-                        fig.clear()
-                        ax = fig.add_subplot(111)
-                        
-                        # Plot based on display type with improved visibility
-                        if display_type == "ACF" and "acf" in result and result["acf"] is not None:
-                            # Handle different array shapes
-                            acf_data = np.array(result["acf"])
-                            if acf_data.ndim > 2:
-                                mean_acf = np.nanmean(acf_data, axis=1)
-                            else:
-                                mean_acf = acf_data
-                                
-                            # Plot each channel
-                            if mean_acf.size > 0:
-                                for ch_idx in range(mean_acf.shape[0] if mean_acf.ndim > 1 else 1):
-                                    if mean_acf.ndim > 1:
-                                        y_data = mean_acf[ch_idx]
-                                    else:
-                                        y_data = mean_acf
-                                        
-                                    # Check for valid data
-                                    if np.any(np.isfinite(y_data)):
-                                        ax.plot(y_data, linewidth=2, label=f"Channel {ch_idx}")
-                                        
-                            ax.set_title("Average Auto-Correlation Function", fontsize=14)
-                            ax.set_xlabel("Lag", fontsize=12)
-                            ax.set_ylabel("Correlation", fontsize=12)
-                            
-                        elif display_type == "CCF" and "ccf" in result and result["ccf"] is not None:
-                            ccf_data = np.array(result["ccf"])
-                            if ccf_data.ndim > 2:
-                                mean_ccf = np.nanmean(ccf_data, axis=1)
-                            else:
-                                mean_ccf = ccf_data
-                                
-                            if mean_ccf.size > 0:
-                                for ch_idx in range(mean_ccf.shape[0] if mean_ccf.ndim > 1 else 1):
-                                    if mean_ccf.ndim > 1:
-                                        data = mean_ccf[ch_idx]
-                                    else:
-                                        data = mean_ccf
-                                        
-                                    if np.any(np.isfinite(data)):
-                                        ch1, ch2 = ch_idx//2, ch_idx%2
-                                        ax.plot(data, linewidth=2, label=f"Channels {ch1} & {ch2}")
-                                        
-                            ax.set_title("Average Cross-Correlation Function", fontsize=14)
-                            ax.set_xlabel("Lag", fontsize=12)
-                            ax.set_ylabel("Correlation", fontsize=12)
-                            
-                        elif display_type == "Period" and "period" in result and result["period"] is not None:
-                            # Create heatmap of periods with better visibility
-                            period_data = np.array(result["period"])
-                            if np.any(np.isfinite(period_data)):
-                                im = ax.imshow(period_data, aspect='auto', cmap='viridis')
-                                cbar = fig.colorbar(im, ax=ax, label="Period")
-                                cbar.ax.tick_params(labelsize=10)
-                                
-                                # Add text values on the heatmap for better visibility
-                                if period_data.size < 50:  # Only add text for smaller arrays
-                                    for i in range(period_data.shape[0]):
-                                        for j in range(period_data.shape[1]):
-                                            if np.isfinite(period_data[i, j]):
-                                                ax.text(j, i, f"{period_data[i, j]:.1f}", 
-                                                       ha="center", va="center", 
-                                                       color="white" if period_data[i, j] > np.nanmean(period_data) else "black")
-                                
-                            ax.set_title("Period by Bin and Channel", fontsize=14)
-                            ax.set_xlabel("Bin", fontsize=12)
-                            ax.set_ylabel("Channel", fontsize=12)
-                            
-                        elif display_type == "Peak Properties" and "peak_widths" in result and result["peak_widths"] is not None:
-                            # Create heatmap of peak widths with better visibility
-                            width_data = np.array(result["peak_widths"])
-                            if np.any(np.isfinite(width_data)):
-                                im = ax.imshow(width_data, aspect='auto', cmap='plasma')
-                                cbar = fig.colorbar(im, ax=ax, label="Width")
-                                cbar.ax.tick_params(labelsize=10)
-                                
-                                # Add text values for better visibility
-                                if width_data.size < 50:  # Only add text for smaller arrays
-                                    for i in range(width_data.shape[0]):
-                                        for j in range(width_data.shape[1]):
-                                            if np.isfinite(width_data[i, j]):
-                                                ax.text(j, i, f"{width_data[i, j]:.1f}", 
-                                                       ha="center", va="center", 
-                                                       color="white" if width_data[i, j] > np.nanmean(width_data) else "black")
-                                
-                            ax.set_title("Peak Widths by Bin and Channel", fontsize=14)
-                            ax.set_xlabel("Bin", fontsize=12)
-                            ax.set_ylabel("Channel", fontsize=12)
-                        
-                        elif display_type == "Summary":
-                            # Create a comprehensive summary plot
-                            # Split into 2x2 grid
-                            fig.clear()
-                            ax1 = fig.add_subplot(221)
-                            ax2 = fig.add_subplot(222)
-                            ax3 = fig.add_subplot(223)
-                            ax4 = fig.add_subplot(224)
-                            
-                            # Plot ACF in first panel
-                            if "acf" in result and result["acf"] is not None:
-                                acf_data = np.array(result["acf"])
-                                if acf_data.ndim > 2:
-                                    mean_acf = np.nanmean(acf_data, axis=1)
-                                else:
-                                    mean_acf = acf_data
-                                    
-                                if mean_acf.size > 0 and np.any(np.isfinite(mean_acf)):
-                                    if mean_acf.ndim > 1:
-                                        ax1.plot(mean_acf[0], linewidth=2)
-                                    else:
-                                        ax1.plot(mean_acf, linewidth=2)
-                                        
-                                ax1.set_title("ACF", fontsize=10)
-                                ax1.grid(show_grid)
-                            
-                            # Plot CCF in second panel
-                            if "ccf" in result and result["ccf"] is not None:
-                                ccf_data = np.array(result["ccf"])
-                                if ccf_data.ndim > 2:
-                                    mean_ccf = np.nanmean(ccf_data, axis=1)
-                                else:
-                                    mean_ccf = ccf_data
-                                    
-                                if mean_ccf.size > 0 and np.any(np.isfinite(mean_ccf)):
-                                    if mean_ccf.ndim > 1:
-                                        ax2.plot(mean_ccf[0], linewidth=2)
-                                    else:
-                                        ax2.plot(mean_ccf, linewidth=2)
-                                        
-                                ax2.set_title("CCF", fontsize=10)
-                                ax2.grid(show_grid)
-                            
-                            # Plot Period in third panel
-                            if "period" in result and result["period"] is not None:
-                                period_data = np.array(result["period"])
-                                if np.any(np.isfinite(period_data)):
-                                    im = ax3.imshow(period_data, aspect='auto', cmap='viridis')
-                                    fig.colorbar(im, ax=ax3, label="Period", fraction=0.046, pad=0.04)
-                                ax3.set_title("Period", fontsize=10)
-                                
-                            # Plot Wave Speed or Peak info in fourth panel
-                            if "wave_speed" in result and result["wave_speed"] is not None:
-                                ws_data = np.array(result["wave_speed"])
-                                if np.any(np.isfinite(ws_data)):
-                                    im = ax4.imshow(ws_data, aspect='auto', cmap='coolwarm')
-                                    fig.colorbar(im, ax=ax4, label="Speed", fraction=0.046, pad=0.04)
-                                ax4.set_title("Wave Speed", fontsize=10)
-                            elif "peak_widths" in result and result["peak_widths"] is not None:
-                                width_data = np.array(result["peak_widths"])
-                                if np.any(np.isfinite(width_data)):
-                                    im = ax4.imshow(width_data, aspect='auto', cmap='plasma')
-                                    fig.colorbar(im, ax=ax4, label="Width", fraction=0.046, pad=0.04)
-                                ax4.set_title("Peak Widths", fontsize=10)
-                            
-                        # Common settings
-                        if display_type != "Summary":  # Not needed for summary which has multiple axes
-                            ax.tick_params(axis='both', which='major', labelsize=10)
-                            ax.grid(show_grid)
-                            if ax.has_data():
-                                ax.legend(fontsize=10, loc='best')
-                        
-                        fig.tight_layout()
-                        canvas.draw()
-    
-    def export_results(self):
-        """Export analysis results to files with improved error handling"""
-        if not self.results or not self.params:
-            QMessageBox.warning(self, "Export Warning", "No results available to export")
+        file_paths = self.locate_processed_files(display_type)
+        
+        print(f"Found {len(file_paths)} files:")
+        for path in file_paths:
+            print(f"  - {os.path.basename(path)}")
+
+        if not file_paths:
+            self.status_label.setText(f"No processed files found for {display_type}.")
             return
+
+        self.status_label.setText(f"Displaying {len(file_paths)} {display_type} result(s).")
         
-        # Ask user for directory
-        export_dir = QFileDialog.getExistingDirectory(
-            self, "Select Export Directory", 
-            self.parent.log_params.get("Base Directory", os.path.expanduser("~"))
-        )
+        # Create a frame for each image to maintain consistent sizing
+        for file_path in file_paths:
+            if file_path.endswith(".png"):
+                # Create a container widget to hold the canvas
+                container = QWidget()
+                container_layout = QVBoxLayout()
+                container_layout.setContentsMargins(0, 0, 0, 0)
+                container.setLayout(container_layout)
+                
+                # Create and add the canvas
+                fig = Figure(figsize=(6, 5), dpi=100)  # Slightly larger figures
+                canvas = FigureCanvas(fig)
+                canvas.setMinimumWidth(400)  # Set minimum width to prevent too small plots
+                canvas.setMinimumHeight(350)  # Set minimum height
+                self.canvases.append(canvas)
+                
+                # Add the canvas to the container
+                container_layout.addWidget(canvas)
+                
+                # Add the container to the main layout
+                self.results_layout.addWidget(container)
+                
+                # Display the image
+                self.display_image(canvas, file_path)
+            elif file_path.endswith(".csv") and display_type == "Summary":
+                # Create a widget to hold the table with its own scrollbars
+                scroll_widget = QWidget()
+                scroll_layout = QVBoxLayout()
+                scroll_layout.setContentsMargins(0, 0, 0, 0)
+                scroll_widget.setLayout(scroll_layout)
+                
+                # Add the table to this widget
+                self.display_csv(file_path)
+                
+                # Add the scroll widget to main layout
+                self.results_layout.addWidget(scroll_widget)
         
-        if not export_dir:
-            return
+        # Add a stretch at the end to keep plots left-aligned
+        self.results_layout.addStretch()
         
-        try:
-            # Create progress dialog
-            progress = QProgressDialog("Exporting results...", "Cancel", 0, len(self.results) * 5)
-            progress.setWindowTitle("Export Progress")
-            progress.setWindowModality(Qt.WindowModal)
-            progress.show()
-            progress_value = 0
-            
-            # Export each result
-            for i, result in enumerate(self.results):
-                # Create a more descriptive base filename
-                analysis_type = self.params.get("type", "unknown")
-                timestamp = result.get("timestamp", "")
-                if timestamp:
-                    base_name = f"wave_analysis_{analysis_type}_{timestamp}_{i+1}"
+        # Ensure the results widget is wide enough to accommodate all plots
+        total_width = len(file_paths) * 420  # 400px width + 20px spacing
+        self.results_widget.setMinimumWidth(total_width)
+
+    def locate_processed_files(self, display_type):
+        """Locate processed files based on the display type."""
+        if not self.results_dir:
+            return []
+
+        keywords = {
+            "ROIs": "ROI",  # For ROI-specific files
+            "Summary": "summary",  # Summary data and mean plots
+            "ACF Plots": {"mean": "Mean ACF", "indv": ["Individual_ACF_plots", "ACF"]},
+            "CCF Plots": {"mean": "Mean CCF", "indv": ["Individual_CCF_plots", "CCF"]},
+            "Peak Properties": {"mean": "Peak Props", "indv": ["Individual_peak_plots", "Peak"]}
+        }
+
+        file_paths = []
+        
+        # Handle different display types
+        if display_type == "Summary":
+            # Look for summary CSV files in main directory
+            for root, dirs, files in os.walk(self.results_dir):
+                for f in files:
+                    if f.endswith(".csv") and keywords[display_type] in f:
+                        file_paths.append(os.path.join(root, f))
+        elif display_type == "ROIs":
+            # Look for ROI-related files
+            for root, dirs, files in os.walk(self.results_dir):
+                for f in files:
+                    if f.endswith(".png") and keywords[display_type] in f:
+                        file_paths.append(os.path.join(root, f))
+        else:
+            # Handle plot types that can show either summary or individual
+            selected_type = display_type  # The type the user selected to view
+            keyword_info = keywords.get(selected_type)  # Get keywords for selected type
+            if keyword_info:
+                print(f"Looking for {selected_type} plots...")
+                # Check if individual plots are requested
+                if hasattr(self, 'show_individual') and self.show_individual.isChecked():
+                    # Show only individual plots
+                    print(f"Looking for individual plots for {selected_type}...")
+                    indv_dir, indv_keyword = keyword_info["indv"]
+                    for root, dirs, files in os.walk(self.results_dir):
+                        if os.path.basename(root) == indv_dir:
+                            for f in files:
+                                if f.endswith(".png") and indv_keyword in f:
+                                    print(f"Found individual plot: {f}")
+                                    file_paths.append(os.path.join(root, f))
                 else:
-                    import datetime
-                    now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                    base_name = f"wave_analysis_{analysis_type}_{now}_{i+1}"
-                
-                # Save summary as CSV
-                with open(os.path.join(export_dir, f"{base_name}_summary.csv"), 'w') as f:
-                    # Add header row
-                    f.write("Metric,Value\n")
-                    
-                    # Add metadata
-                    f.write(f"Analysis Type,{self.params.get('type', 'Unknown')}\n")
-                    f.write(f"Export Date,{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    
-                    # Add period with robust error handling
-                    try:
-                        period_data = result.get("period", None)
-                        if period_data is not None and np.any(np.isfinite(period_data)):
-                            period_mean = np.nanmean(period_data)
-                            f.write(f"Period,{period_mean:.4f}\n")
-                        else:
-                            f.write("Period,N/A\n")
-                    except Exception as e:
-                        print(f"Error exporting period: {str(e)}")
-                        f.write("Period,N/A\n")
-                    
-                    # Add peak amplitude
-                    try:
-                        all_heights = []
-                        if 'peak_props' in result and len(result['peak_props']) > 0:
-                            for p in result['peak_props'][-1].values():
-                                if 'heights' in p and p['heights'] is not None:
-                                    if isinstance(p['heights'], (list, np.ndarray)):
-                                        all_heights.extend(p['heights'])
-                                    else:
-                                        all_heights.append(p['heights'])
-                        
-                        if all_heights and np.any(np.isfinite(all_heights)):
-                            peak_amplitude = np.nanmean(all_heights)
-                            f.write(f"Peak Amplitude,{peak_amplitude:.4f}\n")
-                        else:
-                            f.write("Peak Amplitude,N/A\n")
-                    except Exception as e:
-                        print(f"Error exporting peak amplitude: {str(e)}")
-                        f.write("Peak Amplitude,N/A\n")
-                    
-                    # Add wave speed if available
-                    try:
-                        if "wave_speed" in result and result["wave_speed"] is not None:
-                            ws_data = np.array(result["wave_speed"])
-                            if np.any(np.isfinite(ws_data)):
-                                wave_speed_mean = np.nanmean(ws_data)
-                                f.write(f"Wave Speed,{wave_speed_mean:.4f}\n")
-                            else:
-                                f.write("Wave Speed,N/A\n")
-                    except Exception as e:
-                        print(f"Error exporting wave speed: {str(e)}")
-                        f.write("Wave Speed,N/A\n")
-                
-                progress_value += 1
-                progress.setValue(progress_value)
-                if progress.wasCanceled():
-                    break
-                
-                # Save numerical data as NPZ with error handling
-                try:
-                    # Filter out None values and non-serializable objects
-                    save_dict = {}
-                    for key, value in result.items():
-                        if value is not None and isinstance(value, (np.ndarray, list, dict, int, float, str)):
-                            save_dict[key] = value
-                    
-                    # Add parameters to save dict
-                    save_dict['params'] = {k: v for k, v in self.params.items() 
-                                         if v is not None and isinstance(v, (np.ndarray, list, dict, int, float, str))}
-                    
-                    np.savez(os.path.join(export_dir, f"{base_name}_data.npz"), **save_dict)
-                except Exception as e:
-                    print(f"Error saving NPZ: {str(e)}")
-                    QMessageBox.warning(self, "Export Warning", 
-                                     f"Could not save numerical data for result {i+1}: {str(e)}")
-                
-                progress_value += 1
-                progress.setValue(progress_value)
-                if progress.wasCanceled():
-                    break
-                
-                # Create and save figures with error handling
-                self._export_figures(result, os.path.join(export_dir, base_name), progress)
-                
-                if progress.wasCanceled():
-                    break
+                    # Show only summary plots
+                    print(f"Looking for summary plots for {selected_type}...")
+                    for root, dirs, files in os.walk(self.results_dir):
+                        for f in files:
+                            if f.endswith(".png") and keyword_info["mean"] in f:
+                                print(f"Found summary plot: {f}")
+                                file_paths.append(os.path.join(root, f))
+                                    
+        return sorted(file_paths)
+
+    def display_image(self, canvas, image_path):
+        """Load and display an image on the given canvas."""
+        if not os.path.exists(image_path):
+            # Handle missing file case
+            fig = canvas.figure
+            fig.clear()
+            ax = fig.add_subplot(111)
+            ax.text(0.5, 0.5, "Image not found", fontsize=12, ha="center", va="center")
+            fig.tight_layout()
+            canvas.draw()
+            return
             
-            progress.close()
-            QMessageBox.information(self, "Export Complete", 
-                                   f"Results exported to {export_dir}")
+        try:
+            # Load image without modifying the original file
+            img = imread(image_path)  # This creates a copy of the image data
             
+            fig = canvas.figure
+            fig.clear()
+            ax = fig.add_subplot(111)
+            ax.imshow(img)
+            ax.axis("off")
+            ax.set_title(os.path.basename(image_path), fontsize=10)
+            fig.tight_layout()
+            canvas.draw()
         except Exception as e:
-            QMessageBox.critical(self, "Export Error", f"Error exporting results: {str(e)}")
+            print(f"Error displaying image {image_path}: {e}")
+            # Handle error without affecting original file
+            fig = canvas.figure
+            fig.clear()
+            ax = fig.add_subplot(111)
+            ax.text(0.5, 0.5, "Error loading image", fontsize=12, ha="center", va="center")
+            fig.tight_layout()
+            canvas.draw()
+
+    def display_csv(self, csv_path):
+        """Display the contents of a CSV file in a table widget."""
+        if not os.path.exists(csv_path):
+            QMessageBox.warning(self, "Error", f"CSV file not found: {csv_path}")
+            return
+
+        try:
+            df = pd.read_csv(csv_path)
+            table_widget = QTableWidget()
+            table_widget.setRowCount(len(df))
+            table_widget.setColumnCount(len(df.columns))
+            table_widget.setHorizontalHeaderLabels(df.columns)
+
+            # Calculate the width needed for the table
+            table_width = table_widget.verticalHeader().width()
+            for i in range(table_widget.columnCount()):
+                table_width += table_widget.columnWidth(i)
+
+            # Calculate the height needed for the table
+            table_height = table_widget.horizontalHeader().height()
+            for i in range(table_widget.rowCount()):
+                table_height += table_widget.rowHeight(i)
+
+            # Set fixed size based on content (with some padding)
+            table_widget.setMinimumWidth(min(table_width + 50, 800))  # Cap at 800px width
+            table_widget.setMinimumHeight(min(table_height + 50, 600))  # Cap at 600px height
+
+            # Fill the table
+            for i, row in df.iterrows():
+                for j, value in enumerate(row):
+                    table_widget.setItem(i, j, QTableWidgetItem(str(value)))
+
+            # Create a container widget with vertical layout
+            container = QWidget()
+            container_layout = QVBoxLayout()
+            container_layout.setContentsMargins(0, 0, 0, 0)
+            container_layout.addWidget(table_widget)
+            container.setLayout(container_layout)
+
+            # Add to results layout
+            self.results_layout.addWidget(container)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load CSV file: {e}")
+
+    def display_roi_results(self, roi_selection="All ROIs"):
+        """Display results specific to the selected ROI."""
+        if not self.results is None and hasattr(self.parent, 'crops') and self.parent.crops:
+            # Clear existing display while preserving original data
+            while self.results_layout.count() > 0:
+                item = self.results_layout.takeAt(0)
+                if item.widget():
+                    widget = item.widget()
+                    widget.setParent(None)  # Detach from layout without deleting
+                    widget.deleteLater()  # Schedule for deletion after display is updated
+
+            # Create a table widget to display results
+            table_widget = QTableWidget()
+            
+            if roi_selection == "All ROIs":
+                # Show results for all ROIs
+                display_data = pd.DataFrame()
+                for i, roi in enumerate(self.parent.crops):
+                    roi_data = pd.DataFrame({"ROI": [f"ROI_{i+1}"],
+                                          "X_min": [roi[:, 0].min()],
+                                          "X_max": [roi[:, 0].max()],
+                                          "Y_min": [roi[:, 1].min()],
+                                          "Y_max": [roi[:, 1].max()],
+                                          "Area": [len(roi)]})
+                    display_data = pd.concat([display_data, roi_data], ignore_index=True)
+            else:
+                # Show data for specific ROI
+                roi_idx = int(roi_selection.split("_")[1]) - 1
+                roi = self.parent.crops[roi_idx]
+                display_data = pd.DataFrame({"Parameter": ["X_min", "X_max", "Y_min", "Y_max", "Area"],
+                                           "Value": [roi[:, 0].min(), roi[:, 0].max(),
+                                                   roi[:, 1].min(), roi[:, 1].max(),
+                                                   len(roi)]})
+
+            # Set up table dimensions
+            rows = len(display_data)
+            cols = len(display_data.columns)
+            headers = display_data.columns
+
+            table_widget.setRowCount(rows)
+            table_widget.setColumnCount(cols)
+            table_widget.setHorizontalHeaderLabels(headers)
+
+            # Fill the table with data
+            for i in range(rows):
+                for j, col in enumerate(headers):
+                    value = display_data.iloc[i][col]
+                    table_widget.setItem(i, j, QTableWidgetItem(str(value)))
+
+            # Add the table to the layout
+            self.results_layout.addWidget(table_widget)
+            
+            # Add stretch to keep everything aligned
+            self.results_layout.addStretch()
+
+    def on_roi_selection_changed(self):
+        """Handle changes in ROI selection."""
+        if self.display_combo.currentText() == "ROIs" and self.has_roi_results:
+            self.display_roi_results(self.roi_selector.currentText())
+
+    def set_acf_visibility(self, visible):
+        """Set visibility of the Individual ACF button."""
+        if hasattr(self, "individual_acf_btn"):
+            self.individual_acf_btn.setVisible(visible)
+
+    def set_ccf_visibility(self, visible):
+        """Set visibility of the Individual CCF button."""
+        if hasattr(self, "individual_ccf_btn"):
+            self.individual_ccf_btn.setVisible(visible)
+
+    def set_peaks_visibility(self, visible):
+        """Set visibility of the Individual Peaks button."""
+        if hasattr(self, "individual_peaks_btn"):
+            self.individual_peaks_btn.setVisible(visible)
+
+    def on_display_type_changed(self):
+        """Handle changes in the display type dropdown."""
+        display_type = self.display_combo.currentText()
+        
+        # Show/hide individual plot checkbox based on display type
+        self.show_individual.setVisible(display_type in ["ACF Plots", "CCF Plots", "Peak Properties"])
+        
+        if display_type == "ROIs":
+            # Show ROI selector and results for ROIs view
+            if self.parent and hasattr(self.parent, 'crops') and self.parent.crops:
+                self.has_roi_results = True
+                self.roi_selector.clear()
+                self.roi_selector.addItem("All ROIs")
+                for i in range(len(self.parent.crops)):
+                    self.roi_selector.addItem(f"ROI_{i+1}")
+                self.roi_selector.setVisible(True)
+                self.display_roi_results(self.roi_selector.currentText())
+            else:
+                self.has_roi_results = False
+                self.roi_selector.setVisible(False)
+                if self.results_dir and os.path.exists(self.results_dir):
+                    self.show_results()
+        else:
+            # Hide ROI selector for other views
+            self.roi_selector.setVisible(False)
+            if self.results_dir and os.path.exists(self.results_dir):
+                self.show_results()
+                print(f"Showing results for type: {display_type}")
+            else:
+                print("No results directory set or directory does not exist")
+                
+    def on_show_individual_changed(self, state):
+        """Handle changes in the individual plots checkbox."""
+        print(f"\nIndividual plots checkbox changed to: {'checked' if state else 'unchecked'}")
+        print(f"Current display type: {self.display_combo.currentText()}")
+        if self.results_dir and os.path.exists(self.results_dir):
+            self.show_results()  # This will update the display based on current selection
+
+    def export_plots(self):
+        """Export plots based on selected options."""
+        if not self.results_dir or not os.path.exists(self.results_dir):
+            QMessageBox.warning(self, "Error", "No results directory available.")
+            return
+
+        # Get target directory from user
+        target_dir = QFileDialog.getExistingDirectory(self, "Select Export Directory")
+        if not target_dir:
+            return  # User cancelled
+
+        # Create export directory
+        export_dir = os.path.join(target_dir, "wave_analysis_plots")
+        os.makedirs(export_dir, exist_ok=True)
+
+        try:
+            # Determine which plots to export based on selection
+            export_type = self.export_combo.currentText()
+
+            if export_type == "Summary Plots Only" or export_type == "All Plots":
+                # Export summary plots and data
+                for plot_type in ["Summary", "ACF Plots", "CCF Plots", "Peak Properties"]:
+                    files = self.locate_processed_files(plot_type)
+                    for src in files:
+                        if os.path.exists(src):
+                            dest = os.path.join(export_dir, os.path.basename(src))
+                            with open(src, 'rb') as fsrc, open(dest, 'wb') as fdst:
+                                fdst.write(fsrc.read())
+
+            if export_type == "Individual Plots Only" or export_type == "All Plots":
+                # Export individual plots
+                for plot_type in ["Individual ACF Plots", "Individual CCF Plots", "Individual Peak Plots"]:
+                    files = self.locate_processed_files(plot_type)
+                    if files:  # Only create subdir if files exist
+                        subdir = plot_type.replace(" ", "_")
+                        os.makedirs(os.path.join(export_dir, subdir), exist_ok=True)
+                        for src in files:
+                            if os.path.exists(src):
+                                dest = os.path.join(export_dir, subdir, os.path.basename(src))
+                                with open(src, 'rb') as fsrc, open(dest, 'wb') as fdst:
+                                    fdst.write(fsrc.read())
+
+            QMessageBox.information(self, "Export Complete", f"Plots have been exported to:\n{export_dir}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Failed to export plots:\n{str(e)}")
+            return
