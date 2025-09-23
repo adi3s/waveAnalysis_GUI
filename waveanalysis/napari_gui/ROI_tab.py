@@ -6,7 +6,7 @@ from napari_roi_manager import QRoiManager
 class ROITab(QWidget):
     """Tab for loading images and saving ROIs in Napari viewer"""
     image_loaded = Signal(str)
-    roi_saved = Signal()
+    roi_saved = Signal(list)  # Changed to pass the list of ROIs
 
     def __init__(self, parent):
         """Initialize the ROITab with the parent widget"""
@@ -43,8 +43,19 @@ class ROITab(QWidget):
         """Show the QRoiManager for creating and managing ROIs"""
         if self.roi_manager is None:
             self.roi_manager = QRoiManager(self.parent.viewer)
+            # Connect to the Save button's clicked signal
+            save_button = self.roi_manager.findChild(QPushButton, "Save")
+            if save_button:
+                save_button.clicked.connect(self._on_roi_save)
             self.roi_manager_layout.addWidget(self.roi_manager)
         self.roi_manager_group.setVisible(True)
+
+    def _on_roi_save(self):
+        """Handler for when the Save button in ROI manager is clicked"""
+        rois = self.get_rois()
+        if rois:
+            # Emit our signal with the list of ROIs
+            self.roi_saved.emit(rois)
 
     def get_rois(self):
         """Retrieve the list of ROIs from the QRoiManager"""
