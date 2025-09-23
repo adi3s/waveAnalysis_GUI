@@ -16,6 +16,14 @@ class ValuesTab(QWidget):
 
     def init_ui(self):
         """Initialize the user interface for the ValuesTab"""
+        # Create a scroll area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        # Create content widget
+        content_widget = QWidget()
         main_layout = QVBoxLayout()
 
         # Load Image Section
@@ -50,7 +58,18 @@ class ValuesTab(QWidget):
         save_params = QPushButton("Save Parameters")
         save_params.clicked.connect(self.save_parameters)
         main_layout.addWidget(save_params)
-        self.setLayout(main_layout)
+        
+        # Set the layout for the content widget
+        content_widget.setLayout(main_layout)
+        
+        # Set the content widget in the scroll area
+        scroll.setWidget(content_widget)
+        
+        # Create the final layout
+        final_layout = QVBoxLayout()
+        final_layout.addWidget(scroll)
+        final_layout.setContentsMargins(0, 0, 0, 0)
+        self.setLayout(final_layout)
 
     def load_image(self):
         """Load an image file and emit the path"""
