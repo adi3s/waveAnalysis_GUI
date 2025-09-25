@@ -1,5 +1,9 @@
 import os
-from qtpy.QtWidgets import *
+from qtpy.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QGroupBox,
+    QComboBox, QPushButton, QCheckBox, QMessageBox, QFileDialog,
+    QTableWidget, QTableWidgetItem
+)
 from qtpy.QtCore import Qt, Signal
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure

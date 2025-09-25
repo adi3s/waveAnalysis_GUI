@@ -1,4 +1,4 @@
-from qtpy.QtWidgets import *
+from qtpy.QtWidgets import QWidget, QScrollArea, QVBoxLayout, QDoubleSpinBox, QSpinBox, QPushButton, QGroupBox, QCheckBox, QLabel, QFormLayout
 from magicgui import magicgui
 from qtpy.QtCore import Signal, Qt
 

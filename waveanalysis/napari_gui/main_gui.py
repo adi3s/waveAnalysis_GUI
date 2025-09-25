@@ -2,7 +2,7 @@ import os
 import datetime
 import napari
 import pandas as pd
-from qtpy.QtWidgets import *
+from qtpy.QtWidgets import QWidget, QScrollArea, QTabWidget, QVBoxLayout, QMessageBox
 from qtpy.QtCore import Qt
 from napari_gui.values_tab import ValuesTab
 from napari_gui.ROI_tab import ROITab

@@ -1,5 +1,5 @@
 import os
-from qtpy.QtWidgets import *
+from qtpy.QtWidgets import QWidget, QVBoxLayout, QPushButton, QGroupBox
 from qtpy.QtCore import Signal
 from napari_roi_manager import QRoiManager
 

@@ -1,4 +1,7 @@
-from qtpy.QtWidgets import *
+from qtpy.QtWidgets import (
+    QWidget, QScrollArea, QVBoxLayout, QPushButton, QLabel, QGroupBox,
+    QComboBox, QSpinBox, QFormLayout, QCheckBox, QLineEdit, QFileDialog
+)
 from qtpy.QtCore import Qt, Signal
 import os
 
