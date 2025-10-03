@@ -116,6 +116,23 @@ class PostProcessingTab(QWidget):
             print(f"Invalid results directory: {results_dir}")
             self.results_dir = None
 
+    def set_roi_results(self, results_df):
+        """Handle ROI measurement results"""
+        if isinstance(results_df, pd.DataFrame):
+            # Store ROI results
+            self.roi_results = results_df
+            
+            # Update display if ROIs are currently selected
+            if self.display_combo.currentText() == "ROIs":
+                self.display_roi_results(self.roi_selector.currentText())
+            
+            # Enable ROI selection in display combo
+            if not "ROIs" in [self.display_combo.itemText(i) for i in range(self.display_combo.count())]:
+                self.display_combo.insertItem(0, "ROIs")
+            
+            self.has_roi_results = True
+            self.status_label.setText(f"ROI measurements loaded: {len(results_df)} measurements")
+
     def show_results(self, results=None, params=None):
         """Display processed images or data from the results directory."""
         if isinstance(results, pd.DataFrame):
@@ -352,6 +369,47 @@ class PostProcessingTab(QWidget):
             QMessageBox.critical(self, "Error", f"Failed to load CSV file: {e}")
 
     def display_roi_results(self, roi_selection="All ROIs"):
+        """Display ROI measurement results"""
+        if not hasattr(self, 'roi_results') or self.roi_results is None:
+            self.status_label.setText("No ROI measurements available")
+            return
+
+        # Clear existing display
+        while self.results_layout.count() > 0:
+            item = self.results_layout.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
+                item.widget().deleteLater()
+
+        # Create table widget
+        table = QTableWidget()
+        
+        if roi_selection == "All ROIs":
+            # Show all ROI measurements
+            df = self.roi_results
+        else:
+            # Show measurements for specific ROI
+            roi_id = int(roi_selection.split("_")[1])
+            df = self.roi_results[self.roi_results['ROI_ID'] == roi_id]
+
+        # Set up table dimensions
+        table.setRowCount(len(df))
+        table.setColumnCount(len(df.columns))
+        table.setHorizontalHeaderLabels(df.columns)
+
+        # Fill table with data
+        for i, (_, row) in enumerate(df.iterrows()):
+            for j, value in enumerate(row):
+                table.setItem(i, j, QTableWidgetItem(str(value)))
+
+        # Adjust table size
+        table.resizeColumnsToContents()
+        table.setMinimumWidth(min(sum([table.columnWidth(i) for i in range(table.columnCount())]) + 50, 800))
+        table.setMinimumHeight(min(table.rowHeight(0) * (len(df) + 1) + 50, 600))
+
+        # Add to layout
+        self.results_layout.addWidget(table)
+        self.results_layout.addStretch()
         """Display results specific to the selected ROI."""
         if not self.results is None and hasattr(self.parent, 'crops') and self.parent.crops:
             # Clear existing display while preserving original data

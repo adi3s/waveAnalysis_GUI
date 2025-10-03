@@ -75,6 +75,7 @@ class WaveAnalysisWidget(QWidget):
         # Connect signals
         self.values_tab.image_loaded.connect(self.handle_new_image)
         self.roi_tab.roi_saved.connect(self.handle_new_roi)
+        self.roi_tab.measurements_ready.connect(self.post_process_tab.set_roi_results)
         self.pre_process_tab.analyze.clicked.connect(self.run_analysis)
 
     def handle_new_image(self, image_path):
@@ -85,6 +86,9 @@ class WaveAnalysisWidget(QWidget):
 
         # Add image to viewer
         self.viewer.add_image(self.current_image, name=os.path.basename(image_path))
+        
+        # Notify the ROI tab about the new image
+        self.roi_tab.set_current_image(image_path)
         
         # Update log parameters with just the selected file
         self.log_params.update({
