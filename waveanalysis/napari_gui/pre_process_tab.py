@@ -1,4 +1,8 @@
-from qtpy.QtWidgets import QWidget, QScrollArea, QVBoxLayout, QDoubleSpinBox, QSpinBox, QPushButton, QGroupBox, QCheckBox, QLabel, QFormLayout
+from qtpy.QtWidgets import (
+    QWidget, QScrollArea, QVBoxLayout, QDoubleSpinBox, QSpinBox, 
+    QPushButton, QGroupBox, QCheckBox, QLabel, QFormLayout,
+    QHBoxLayout, QComboBox
+)
 from magicgui import magicgui
 from qtpy.QtCore import Signal, Qt
 
@@ -20,15 +24,36 @@ class PreProcessingTab(QWidget):
 
     def init_ui(self):
         """Initialize the user interface for the PreProcessingTab"""
-        # Create scroll area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-
-        # Create content widget
-        content_widget = QWidget()
         layout = QVBoxLayout()
+        
+        # Add ROI Processing group
+        roi_group = QGroupBox("ROI Processing")
+        roi_layout = QVBoxLayout()
+        
+        # Channel selection for ROIs
+        channel_layout = QHBoxLayout()
+        channel_layout.addWidget(QLabel("ROI Channel:"))
+        self.roi_channel_combo = QComboBox()
+        self.roi_channel_combo.addItems(["First", "Max Projection", "Mean Projection"])
+        channel_layout.addWidget(self.roi_channel_combo)
+        roi_layout.addLayout(channel_layout)
+        
+        # Frame options for ROI time series
+        roi_frame_layout = QHBoxLayout()
+        self.process_all_frames = QCheckBox("Process all frames")
+        self.process_all_frames.setChecked(True)
+        roi_frame_layout.addWidget(self.process_all_frames)
+        
+        roi_frame_layout.addWidget(QLabel("Frame interval:"))
+        self.frame_interval = QSpinBox()
+        self.frame_interval.setMinimum(1)
+        self.frame_interval.setMaximum(1000)
+        self.frame_interval.setValue(1)
+        roi_frame_layout.addWidget(self.frame_interval)
+        roi_layout.addLayout(roi_frame_layout)
+        
+        roi_group.setLayout(roi_layout)
+        layout.addWidget(roi_group)
         
         # Threshold controls
         self.threshold = QDoubleSpinBox()
@@ -57,14 +82,17 @@ class PreProcessingTab(QWidget):
         summary_plots_layout = QVBoxLayout()
         
         self.acf_checkbox = QCheckBox("ACF Plots")
+        self.acf_checkbox.setChecked(True)
         self.acf_checkbox.stateChanged.connect(self.on_acf_selected)
         summary_plots_layout.addWidget(self.acf_checkbox)
         
         self.ccf_checkbox = QCheckBox("CCF Plots")
+        self.ccf_checkbox.setChecked(True)
         self.ccf_checkbox.stateChanged.connect(self.on_ccf_selected)
         summary_plots_layout.addWidget(self.ccf_checkbox)
         
         self.peaks_checkbox = QCheckBox("Peaks Plots")
+        self.peaks_checkbox.setChecked(True)
         self.peaks_checkbox.stateChanged.connect(self.on_peaks_selected)
         summary_plots_layout.addWidget(self.peaks_checkbox)
         
@@ -108,17 +136,8 @@ class PreProcessingTab(QWidget):
         layout.addWidget(self.analyze)
         layout.addWidget(plots_group)
         
-        # Set the layout for the content widget
-        content_widget.setLayout(layout)
-        
-        # Set the content widget in the scroll area
-        scroll.setWidget(content_widget)
-        
-        # Create the final layout
-        final_layout = QVBoxLayout()
-        final_layout.addWidget(scroll)
-        final_layout.setContentsMargins(0, 0, 0, 0)
-        self.setLayout(final_layout)
+        # Set the layout directly
+        self.setLayout(layout)
 
     def on_acf_selected(self, state):
         """Emit signal when ACF checkbox is toggled"""
@@ -152,5 +171,9 @@ class PreProcessingTab(QWidget):
             "smooth_order": self.smooth_order.value(),
             "plot_indv_acfs": self.indv_acf_checkbox.isChecked(),
             "plot_indv_ccfs": self.indv_ccf_checkbox.isChecked(),
-            "plot_indv_peaks": self.indv_peaks_checkbox.isChecked()
+            "plot_indv_peaks": self.indv_peaks_checkbox.isChecked(),
+            # ROI processing parameters
+            "roi_channel": self.roi_channel_combo.currentText(),
+            "process_all_frames": self.process_all_frames.isChecked(),
+            "frame_interval": self.frame_interval.value()
         }
