@@ -1,48 +1,48 @@
+import os
+import json
+from pathlib import Path
 from qtpy.QtWidgets import (
     QWidget, QScrollArea, QVBoxLayout, QPushButton, QLabel, QGroupBox,
-    QComboBox, QSpinBox, QFormLayout, QCheckBox, QLineEdit, QFileDialog
+    QComboBox, QSpinBox, QFormLayout, QCheckBox, QLineEdit, QFileDialog,
+    QListWidget, QHBoxLayout
 )
 from qtpy.QtCore import Qt, Signal
-import os
 
 class ValuesTab(QWidget):
-    """Tab for setting analysis parameters and selecting analysis type"""
+    """
+    Tab for setting analysis parameters and selecting analysis type.
+    
+    Supports loading multiple images/movies and managing analysis parameters
+    for different types of wave analysis (Standard, Rolling, Kymograph).
+    """
     image_loaded = Signal(str)  # Signal to notify when an image is loaded
+    images_updated = Signal(list)  # Signal to notify when image list changes
 
     def __init__(self, parent):
         """Initialize the ValuesTab with the parent widget"""
         super().__init__(parent)
         self.parent = parent
+        self.image_files = []  # Store list of loaded image files
+        self.current_image_path = None
         self.init_ui()
         self.setup_parameter_groups()
         self.update_visible_params()
 
     def init_ui(self):
-        """Initialize the user interface for the ValuesTab"""
-        # Create a scroll area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-
-        # Create content widget
-        content_widget = QWidget()
+        """Initialize the user interface with scrollable layout for multiple images"""
+        # Create main layout
         main_layout = QVBoxLayout()
-
-        # Load Image Section
-        self.load_btn = QPushButton("Load Image")
-        self.load_btn.clicked.connect(self.load_image)
-        self.path_label = QLabel("No image loaded")
-        load_layout = QVBoxLayout()
-        load_layout.addWidget(self.load_btn)
-        load_layout.addWidget(self.path_label)
-        load_group = QGroupBox("Image Controls")
-        load_group.setLayout(load_layout)
-
-        # Analysis Type Selection
-        self.analysis_combo = QComboBox()
-        self.analysis_combo.addItems(["Standard", "Rolling", "Kymograph"])
-        self.analysis_combo.currentIndexChanged.connect(self.update_visible_params)
+        
+        # Create scroll area for the entire widget
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setFrameShape(QScrollArea.NoFrame)  # Remove frame for cleaner look
+        
+        # Create container widget for the scroll area
+        scroll_content = QWidget()
+        layout = QVBoxLayout()
 
         # Parameter Groups
         self.standard_params = QGroupBox("Standard Parameters")
@@ -50,36 +50,146 @@ class ValuesTab(QWidget):
         self.kymo_params = QGroupBox("Kymograph Parameters")
         self.common_params = QGroupBox("Common Parameters")
 
-        main_layout.addWidget(QLabel("Analysis Type:"))
-        main_layout.addWidget(self.analysis_combo)
-        main_layout.addWidget(self.standard_params)
-        main_layout.addWidget(self.rolling_params)
-        main_layout.addWidget(self.kymo_params)
-        main_layout.addWidget(self.common_params)
-        main_layout.addWidget(load_group)
+        # Analysis Type Selection
+        self.analysis_combo = QComboBox()
+        self.analysis_combo.addItems(["Standard", "Rolling", "Kymograph"])
+        self.analysis_combo.currentIndexChanged.connect(self.update_visible_params)
+
+        # Load Image Section with multiple image support
+        load_group = QGroupBox("Image/Movie Controls")
+        load_layout = QVBoxLayout()
+        
+        # Image list with scroll area
+        self.image_list = QListWidget()
+        self.image_list.setMaximumHeight(200)  # Set maximum height to enable scrolling
+        load_layout.addWidget(QLabel("Loaded Images/Movies:"))
+        load_layout.addWidget(self.image_list)
+        
+        # Buttons for image management
+        button_layout = QHBoxLayout()
+        self.load_btn = QPushButton("Load Image/Movie")
+        self.load_btn.clicked.connect(self.load_image)
+        self.remove_btn = QPushButton("Remove Selected")
+        self.remove_btn.clicked.connect(self.remove_image)
+        self.clear_all_btn = QPushButton("Clear All")
+        self.clear_all_btn.clicked.connect(self.clear_all_images)
+        
+        button_layout.addWidget(self.load_btn)
+        button_layout.addWidget(self.remove_btn)
+        button_layout.addWidget(self.clear_all_btn)
+        load_layout.addLayout(button_layout)
+        
+        # Movie info label
+        self.movie_info_label = QLabel("Supported formats: TIFF, PNG, JPG, LSM (2D movies as TIFF stacks)")
+        self.movie_info_label.setWordWrap(True)
+        load_layout.addWidget(self.movie_info_label)
+        
+        load_group.setLayout(load_layout)
+
+        layout.addWidget(QLabel("Analysis Type:"))
+        layout.addWidget(self.analysis_combo)
+        layout.addWidget(self.standard_params)
+        layout.addWidget(self.rolling_params)
+        layout.addWidget(self.kymo_params)
+        layout.addWidget(self.common_params)
+        layout.addWidget(load_group)
 
         save_params = QPushButton("Save Parameters")
         save_params.clicked.connect(self.save_parameters)
-        main_layout.addWidget(save_params)
+        layout.addWidget(save_params)
         
-        # Set the layout for the content widget
-        content_widget.setLayout(main_layout)
+        # Add stretch to prevent excessive vertical expansion
+        layout.addStretch()
         
-        # Set the content widget in the scroll area
-        scroll.setWidget(content_widget)
+        # Set up scroll area
+        scroll_content.setLayout(layout)
+        scroll_area.setWidget(scroll_content)
         
-        # Create the final layout
-        final_layout = QVBoxLayout()
-        final_layout.addWidget(scroll)
-        final_layout.setContentsMargins(0, 0, 0, 0)
-        self.setLayout(final_layout)
+        # Add scroll area to main layout
+        main_layout.addWidget(scroll_area)
+        self.setLayout(main_layout)
+        
+        # Set size constraints for the widget
+        self.setMinimumSize(400, 300)
+        self.setMaximumSize(800, 600)  # Reasonable maximum size
+        self.resize(500, 450)  # Default size
 
     def load_image(self):
-        """Load an image file and emit the path"""
-        path, _ = QFileDialog.getOpenFileName()
-        if path:
-            self.path_label.setText(f"Loaded: {os.path.basename(path)}")
-            self.image_loaded.emit(path)  # Emit the signal with the image path
+        """Load an image or movie file and add it to the list"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Open Image/Movie", "", 
+            "Image/Movie files (*.tif *.tiff *.png *.jpg *.jpeg *.lsm)"
+        )
+        
+        if file_path:
+            # Check if file is already loaded
+            if file_path in self.image_files:
+                from qtpy.QtWidgets import QMessageBox
+                QMessageBox.information(self, "Already Loaded", 
+                                      f"File '{Path(file_path).name}' is already in the list.")
+                return
+            
+            # Add to image list
+            self.image_files.append(file_path)
+            item_text = f"{Path(file_path).name}"
+            
+            # Try to get image info (this could be enhanced to read actual image data)
+            try:
+                # Add file size info
+                file_size = os.path.getsize(file_path)
+                if file_size > 1024 * 1024:  # > 1MB
+                    size_str = f" ({file_size / (1024 * 1024):.1f} MB)"
+                else:
+                    size_str = f" ({file_size / 1024:.1f} KB)"
+                item_text += size_str
+            except Exception:
+                pass  # If we can't get size, just use filename
+            
+            self.image_list.addItem(item_text)
+            
+            # Set as current image
+            self.current_image_path = file_path
+            
+            # Emit signals
+            self.image_loaded.emit(file_path)
+            self.images_updated.emit(self.image_files.copy())
+
+    def remove_image(self):
+        """Remove selected image from list"""
+        current_row = self.image_list.currentRow()
+        if current_row >= 0:
+            # Remove from list
+            removed_file = self.image_files.pop(current_row)
+            self.image_list.takeItem(current_row)
+            
+            # Update current image path
+            if self.image_files:
+                self.current_image_path = self.image_files[0]
+            else:
+                self.current_image_path = None
+            
+            # Emit signal
+            self.images_updated.emit(self.image_files.copy())
+
+    def clear_all_images(self):
+        """Clear all loaded images"""
+        self.image_files.clear()
+        self.image_list.clear()
+        self.current_image_path = None
+        self.images_updated.emit(self.image_files.copy())
+
+    def get_loaded_images(self):
+        """Get list of all loaded image file paths"""
+        return self.image_files.copy()
+
+    def get_current_image(self):
+        """Get the currently selected or most recently loaded image"""
+        current_row = self.image_list.currentRow()
+        if current_row >= 0 and current_row < len(self.image_files):
+            return self.image_files[current_row]
+        elif self.image_files:
+            return self.image_files[0]  # Return first image if none selected
+        return None
 
     def setup_parameter_groups(self):
         """Setup the parameter groups for the 3 analysis types"""
@@ -162,7 +272,10 @@ class ValuesTab(QWidget):
         analysis_type = self.analysis_combo.currentText().lower()
         params = {
             "type": analysis_type,
-            "group_names": [n.strip() for n in self.group_names.text().split(",") if n.strip()]
+            "group_names": [n.strip() for n in self.group_names.text().split(",") if n.strip()],
+            "loaded_images": self.image_files.copy(),
+            "current_image": self.get_current_image(),
+            "total_images": len(self.image_files)
         }
 
         if analysis_type == "standard":
@@ -215,3 +328,89 @@ class ValuesTab(QWidget):
                 errors.append("At least one group name is required")
 
         return errors
+
+    def save_settings(self, filename):
+        """Save current settings to file"""
+        params = self.get_params()
+        settings = {
+            "analysis_type": self.analysis_combo.currentText(),
+            "group_names": self.group_names.text(),
+            "loaded_images": self.image_files,
+            "current_image": self.get_current_image(),
+        }
+
+        if params["type"] == "standard":
+            settings.update({
+                "std_box_size": self.std_box_size.value(),
+                "std_bin_shift": self.std_bin_shift.value()
+            })
+        elif params["type"] == "rolling":
+            settings.update({
+                "roll_box_size": self.roll_box_size.value(),
+                "roll_bin_shift": self.roll_bin_shift.value(),
+                "roll_sub_size": self.roll_sub_size.value(),
+                "roll_sub_shift": self.roll_sub_shift.value()
+            })
+        elif params["type"] == "kymograph":
+            settings.update({
+                "kymo_line_width": self.kymo_line_width.value(),
+                "kymo_bin_shift": self.kymo_bin_shift.value(),
+                "calc_speed": self.calc_speed.isChecked()
+            })
+
+        with open(filename, 'w') as f:
+            json.dump(settings, f, indent=2)
+
+    def load_settings(self, filename):
+        """Load settings from file"""
+        try:
+            with open(filename, 'r') as f:
+                settings = json.load(f)
+
+            # Restore analysis type
+            if "analysis_type" in settings:
+                self.analysis_combo.setCurrentText(settings["analysis_type"])
+
+            # Restore group names
+            if "group_names" in settings:
+                self.group_names.setText(settings["group_names"])
+
+            # Restore loaded images
+            if "loaded_images" in settings:
+                self.clear_all_images()
+                for image_path in settings["loaded_images"]:
+                    if os.path.exists(image_path):
+                        self.image_files.append(image_path)
+                        item_text = f"{os.path.basename(image_path)} ({self._format_file_size(os.path.getsize(image_path))})"
+                        self.image_list.addItem(item_text)
+                
+                # Set current image if available
+                if "current_image" in settings and settings["current_image"] in self.image_files:
+                    index = self.image_files.index(settings["current_image"])
+                    self.image_list.setCurrentRow(index)
+
+            # Restore analysis parameters
+            if "std_box_size" in settings:
+                self.std_box_size.setValue(settings["std_box_size"])
+            if "std_bin_shift" in settings:
+                self.std_bin_shift.setValue(settings["std_bin_shift"])
+            if "roll_box_size" in settings:
+                self.roll_box_size.setValue(settings["roll_box_size"])
+            if "roll_bin_shift" in settings:
+                self.roll_bin_shift.setValue(settings["roll_bin_shift"])
+            if "roll_sub_size" in settings:
+                self.roll_sub_size.setValue(settings["roll_sub_size"])
+            if "roll_sub_shift" in settings:
+                self.roll_sub_shift.setValue(settings["roll_sub_shift"])
+            if "kymo_line_width" in settings:
+                self.kymo_line_width.setValue(settings["kymo_line_width"])
+            if "kymo_bin_shift" in settings:
+                self.kymo_bin_shift.setValue(settings["kymo_bin_shift"])
+            if "calc_speed" in settings:
+                self.calc_speed.setChecked(settings["calc_speed"])
+
+            self.images_updated.emit()
+
+        except Exception as e:
+            # Error loading settings - fail silently and continue with defaults
+            pass
