@@ -2,7 +2,7 @@ import os
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QGroupBox,
     QComboBox, QPushButton, QCheckBox, QMessageBox, QFileDialog,
-    QTableWidget, QTableWidgetItem
+    QTableWidget, QTableWidgetItem, QGridLayout
 )
 from qtpy.QtCore import Qt, Signal
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -21,8 +21,8 @@ class PostProcessingTab(QWidget):
         self.results_dir = None
         self.results = None
         self.params = None
+        self.loaded_images = []  # Store list of loaded images
         self.canvases = []
-        self.has_roi_results = False
         
         # Main layout
         layout = QVBoxLayout()
@@ -54,9 +54,37 @@ class PostProcessingTab(QWidget):
         
         # Display options
         display_box = QVBoxLayout()
-        display_label = QLabel("Display Type:")
+        display_label = QLabel("Display Options:")
         display_label.setStyleSheet("font-weight: bold;")
         display_box.addWidget(display_label)
+
+        # Data source selection with help text (hidden for Summary view)
+        self.data_source_widget = QWidget()
+        data_source_widget_layout = QVBoxLayout()
+        data_source_widget_layout.setContentsMargins(0, 0, 0, 0)
+        
+        data_source_help = QLabel("Select data to display:")
+        data_source_help.setStyleSheet("font-size: 10px; color: gray;")
+        data_source_widget_layout.addWidget(data_source_help)
+        
+        data_source_layout = QHBoxLayout()
+        self.whole_image_checkbox = QCheckBox("Whole Image")
+        self.whole_image_checkbox.setChecked(True)
+        self.whole_image_checkbox.setToolTip("Show analysis results for the entire image")
+        self.whole_image_checkbox.stateChanged.connect(self.on_data_source_changed)
+        
+        self.roi_data_checkbox = QCheckBox("ROI Data")
+        self.roi_data_checkbox.setChecked(False)
+        self.roi_data_checkbox.setToolTip("Show analysis results for individual ROIs")
+        self.roi_data_checkbox.stateChanged.connect(self.on_data_source_changed)
+        
+        data_source_layout.addWidget(self.whole_image_checkbox)
+        data_source_layout.addWidget(self.roi_data_checkbox)
+        data_source_widget_layout.addLayout(data_source_layout)
+        
+        self.data_source_widget.setLayout(data_source_widget_layout)
+        self.data_source_widget.setVisible(False)  # Hidden by default for Summary
+        display_box.addWidget(self.data_source_widget)
 
         # Export controls
         export_box = QVBoxLayout()
@@ -78,7 +106,6 @@ class PostProcessingTab(QWidget):
         
         self.display_combo = QComboBox()
         self.display_combo.addItems([
-            "ROIs", 
             "Summary",
             "ACF Plots",
             "CCF Plots", 
@@ -92,13 +119,12 @@ class PostProcessingTab(QWidget):
         self.show_individual.stateChanged.connect(self.on_show_individual_changed)
         self.show_individual.setVisible(False)  # Only show for plot types that support it
         display_box.addWidget(self.show_individual)
+
+        # Display type dropdown
+        display_type_label = QLabel("Plot Type:")
+        display_box.addWidget(display_type_label)
         
-        # Add ROI selector
-        self.roi_selector = QComboBox()
-        self.roi_selector.addItem("All ROIs")
-        self.roi_selector.setVisible(False)  # Hidden by default
-        self.roi_selector.currentIndexChanged.connect(self.on_roi_selection_changed)
-        display_box.addWidget(self.roi_selector)
+        # ROI selector removed as ROIs are now processed automatically
         
         controls_layout.addLayout(display_box)
         controls_layout.addLayout(export_box)
@@ -111,120 +137,176 @@ class PostProcessingTab(QWidget):
         """Set the directory where the results are stored."""
         if isinstance(results_dir, str) and os.path.isdir(results_dir):
             self.results_dir = results_dir
-            print(f"Results directory set to: {self.results_dir}")
         else:
-            print(f"Invalid results directory: {results_dir}")
             self.results_dir = None
 
+    def set_loaded_images(self, image_list):
+        """Set the list of loaded images for multi-image analysis display"""
+        self.loaded_images = image_list if image_list else []
+
     def set_roi_results(self, results_df):
-        """Handle ROI measurement results"""
-        if isinstance(results_df, pd.DataFrame):
-            # Store ROI results
-            self.roi_results = results_df
-            
-            # Update display if ROIs are currently selected
-            if self.display_combo.currentText() == "ROIs":
-                self.display_roi_results(self.roi_selector.currentText())
-            
-            # Enable ROI selection in display combo
-            if not "ROIs" in [self.display_combo.itemText(i) for i in range(self.display_combo.count())]:
-                self.display_combo.insertItem(0, "ROIs")
-            
-            self.has_roi_results = True
-            self.status_label.setText(f"ROI measurements loaded: {len(results_df)} measurements")
+        """Handle ROI measurement results (deprecated)"""
+        pass  # ROI results are now handled automatically through the analysis process
 
     def show_results(self, results=None, params=None):
         """Display processed images or data from the results directory."""
         if isinstance(results, pd.DataFrame):
             self.results = results
-            # Update ROI information
-            self.has_roi_results = True
-            if self.parent and hasattr(self.parent, 'crops') and self.parent.crops:
-                # Update ROI selector with actual ROI information
-                self.roi_selector.clear()
-                self.roi_selector.addItem("All ROIs")
-                for i in range(len(self.parent.crops)):
-                    self.roi_selector.addItem(f"ROI_{i+1}")
-                self.roi_selector.setVisible(True)
-                print(f"Added {len(self.parent.crops)} ROIs to selector")
-            else:
-                self.has_roi_results = False
-                self.roi_selector.setVisible(False)
         if isinstance(params, dict):
             self.params = params
 
         if not isinstance(self.results_dir, str) or not os.path.exists(self.results_dir):
             QMessageBox.warning(self, "Error", "Invalid or missing results directory.")
-            print(f"Current results directory: {self.results_dir}")
             return
-            
-        print(f"Looking for results in: {self.results_dir}")
 
         # Clear existing widgets from the layout while preserving the original files
         while self.results_layout.count() > 0:
             item = self.results_layout.takeAt(0)
             if item.widget():
                 widget = item.widget()
-                widget.setParent(None)  # Detach from layout without deleting
-                widget.deleteLater()  # Schedule for deletion after display is updated
+                widget.setParent(None)
+                widget.deleteLater()
         
-        # Clear the stored canvas references (doesn't affect original files)
+        # Clear the stored canvas references
         self.canvases.clear()
-
-        # Locate processed files based on the selected display type
-        display_type = self.display_combo.currentText()
-        print(f"\nShowing results for display type: {display_type}")
-        if hasattr(self, 'show_individual'):
-            print(f"Show Individual Plots checkbox state: {self.show_individual.isChecked()}")
         
+        # Create a grid layout for organized display of ROI plots
+        grid_widget = QWidget()
+        grid_layout = QGridLayout()
+        grid_widget.setLayout(grid_layout)
+        self.results_layout.addWidget(grid_widget)
+
+        # Get display type and files
+        display_type = self.display_combo.currentText()
         file_paths = self.locate_processed_files(display_type)
         
-        print(f"Found {len(file_paths)} files:")
-        for path in file_paths:
-            print(f"  - {os.path.basename(path)}")
-
         if not file_paths:
-            self.status_label.setText(f"No processed files found for {display_type}.")
+            # Check if user selected ROI data but no ROI files exist
+            if self.roi_data_checkbox.isChecked() and not self.whole_image_checkbox.isChecked():
+                self.status_label.setText(f"No ROI processed files found for {display_type}. Try running analysis with ROIs first.")
+            else:
+                self.status_label.setText(f"No processed files found for {display_type}.")
+            
+            # Display a helpful message
+            container = QWidget()
+            container_layout = QVBoxLayout()
+            
+            if self.roi_data_checkbox.isChecked() and not self.whole_image_checkbox.isChecked():
+                message = QLabel(
+                    "No ROI analysis results found.\n\n"
+                    "To see ROI-specific results:\n"
+                    "1. Go to the ROI tab and create ROIs\n"
+                    "2. Run analysis from the Pre-Processing tab\n"
+                    "3. ROI-specific results will appear here"
+                )
+            else:
+                message = QLabel(f"No processed files found for {display_type}.")
+            
+            message.setAlignment(Qt.AlignCenter)
+            message.setStyleSheet("color: gray; font-size: 12px; padding: 20px;")
+            container_layout.addWidget(message)
+            container.setLayout(container_layout)
+            self.results_layout.addWidget(container)
             return
-
-        self.status_label.setText(f"Displaying {len(file_paths)} {display_type} result(s).")
-        
-        # Create a frame for each image to maintain consistent sizing
+            
+        # Group files by ROI or Group (enhanced logic for multi-image analysis)
+        grouped_files = {}
         for file_path in file_paths:
-            if file_path.endswith(".png"):
-                # Create a container widget to hold the canvas
-                container = QWidget()
-                container_layout = QVBoxLayout()
-                container_layout.setContentsMargins(0, 0, 0, 0)
-                container.setLayout(container_layout)
-                
-                # Create and add the canvas
-                fig = Figure(figsize=(6, 5), dpi=100)  # Slightly larger figures
-                canvas = FigureCanvas(fig)
-                canvas.setMinimumWidth(400)  # Set minimum width to prevent too small plots
-                canvas.setMinimumHeight(350)  # Set minimum height
-                self.canvases.append(canvas)
-                
-                # Add the canvas to the container
-                container_layout.addWidget(canvas)
-                
-                # Add the container to the main layout
-                self.results_layout.addWidget(container)
-                
-                # Display the image
-                self.display_image(canvas, file_path)
-            elif file_path.endswith(".csv") and display_type == "Summary":
-                # Create a widget to hold the table with its own scrollbars
-                scroll_widget = QWidget()
-                scroll_layout = QVBoxLayout()
-                scroll_layout.setContentsMargins(0, 0, 0, 0)
-                scroll_widget.setLayout(scroll_layout)
-                
-                # Add the table to this widget
-                self.display_csv(file_path)
-                
-                # Add the scroll widget to main layout
-                self.results_layout.addWidget(scroll_widget)
+            filename = os.path.basename(file_path)
+            filepath_parts = file_path.split(os.sep)
+            
+            # Look for ROI or Group identifiers in path (prioritize directory structure)
+            group_identifier = None
+            
+            # First check for ROI directories in the path (highest priority)
+            for part in filepath_parts:
+                if part.startswith("ROI_"):
+                    group_identifier = part
+                    break
+            
+            # Then check for group directories or image names in the path
+            if not group_identifier:
+                for part in filepath_parts:
+                    if part.startswith("1_Group") or part.startswith("Image_"):
+                        group_identifier = part
+                        break
+            
+            # Then check for ROI in filename
+            if not group_identifier:
+                if "ROI_" in filename:
+                    group_identifier = "ROI_" + filename.split("ROI_")[1].split("_")[0]
+                elif "roi_" in filename:
+                    group_identifier = "ROI_" + filename.split("roi_")[1].split("_")[0]
+            
+            # If no specific identifier found, use the parent directory name or display type
+            if not group_identifier:
+                if len(filepath_parts) > 1:
+                    parent_dir = os.path.basename(os.path.dirname(file_path))
+                    if parent_dir and parent_dir != os.path.basename(self.results_dir):
+                        group_identifier = parent_dir
+                    else:
+                        group_identifier = display_type
+                else:
+                    group_identifier = display_type
+            
+            if group_identifier not in grouped_files:
+                grouped_files[group_identifier] = []
+            grouped_files[group_identifier].append(file_path)
+        
+        # Display files in a grid, one row per group
+        row = 0
+        for group_name, files in grouped_files.items():
+            # Add group label
+            label = QLabel(group_name)
+            label.setStyleSheet("font-weight: bold; color: #ffcc00;")
+            grid_layout.addWidget(label, row, 0)
+            col = 1
+            
+            # Add plots for this group
+            for file_path in files:
+                if file_path.endswith(".png"):
+                    # Create container and canvas
+                    container = QWidget()
+                    container_layout = QVBoxLayout()
+                    container_layout.setContentsMargins(5, 5, 5, 5)
+                    container.setLayout(container_layout)
+                    
+                    fig = Figure(figsize=(5, 4), dpi=100)
+                    canvas = FigureCanvas(fig)
+                    canvas.setMinimumWidth(300)
+                    canvas.setMinimumHeight(250)
+                    self.canvases.append(canvas)
+                    
+                    container_layout.addWidget(canvas)
+                    grid_layout.addWidget(container, row, col)
+                    
+                    self.display_image(canvas, file_path)
+                    col += 1
+                elif file_path.endswith(".csv") and display_type == "Summary":
+                    scroll_widget = QWidget()
+                    scroll_layout = QVBoxLayout()
+                    scroll_layout.setContentsMargins(5, 5, 5, 5)
+                    scroll_widget.setLayout(scroll_layout)
+                    
+                    self.display_csv(file_path)
+                    grid_layout.addWidget(scroll_widget, row, col)
+                    col += 1
+            row += 1
+        
+        # Update status message based on data source selection
+        if display_type == "Summary":
+            # For Summary, always show all data
+            data_source_text = "All Data"
+        else:
+            data_source = []
+            if self.whole_image_checkbox.isChecked():
+                data_source.append("Whole Image")
+            if self.roi_data_checkbox.isChecked():
+                data_source.append("ROI Data")
+            
+            data_source_text = " & ".join(data_source) if data_source else "No Data"
+        
+        self.status_label.setText(f"Displaying {len(grouped_files)} result groups for {display_type} ({data_source_text}).")
         
         # Add a stretch at the end to keep plots left-aligned
         self.results_layout.addStretch()
@@ -234,12 +316,11 @@ class PostProcessingTab(QWidget):
         self.results_widget.setMinimumWidth(total_width)
 
     def locate_processed_files(self, display_type):
-        """Locate processed files based on the display type."""
+        """Locate processed files based on the display type and data source selection."""
         if not self.results_dir:
             return []
 
         keywords = {
-            "ROIs": "ROI",  # For ROI-specific files
             "Summary": "summary",  # Summary data and mean plots
             "ACF Plots": {"mean": "Mean ACF", "indv": ["Individual_ACF_plots", "ACF"]},
             "CCF Plots": {"mean": "Mean CCF", "indv": ["Individual_CCF_plots", "CCF"]},
@@ -248,46 +329,74 @@ class PostProcessingTab(QWidget):
 
         file_paths = []
         
-        # Handle different display types
+        # Determine data source filter
+        # For Summary, always show both whole image and ROI data
         if display_type == "Summary":
-            # Look for summary CSV files in main directory
+            show_whole_image = True
+            show_roi_data = True
+        else:
+            show_whole_image = self.whole_image_checkbox.isChecked()
+            show_roi_data = self.roi_data_checkbox.isChecked()
+        
+        # Handle different display types - search in original structure
+        if display_type == "Summary":
+            # Look for summary CSV files in main directory and subdirectories
             for root, dirs, files in os.walk(self.results_dir):
                 for f in files:
                     if f.endswith(".csv") and keywords[display_type] in f:
-                        file_paths.append(os.path.join(root, f))
-        elif display_type == "ROIs":
-            # Look for ROI-related files
-            for root, dirs, files in os.walk(self.results_dir):
-                for f in files:
-                    if f.endswith(".png") and keywords[display_type] in f:
-                        file_paths.append(os.path.join(root, f))
+                        file_path = os.path.join(root, f)
+                        # Filter based on data source selection (always both for Summary)
+                        if self._should_include_file(f, file_path, show_whole_image, show_roi_data):
+                            file_paths.append(file_path)
         else:
             # Handle plot types that can show either summary or individual
             selected_type = display_type  # The type the user selected to view
             keyword_info = keywords.get(selected_type)  # Get keywords for selected type
             if keyword_info:
-                print(f"Looking for {selected_type} plots...")
                 # Check if individual plots are requested
                 if hasattr(self, 'show_individual') and self.show_individual.isChecked():
                     # Show only individual plots
-                    print(f"Looking for individual plots for {selected_type}...")
                     indv_dir, indv_keyword = keyword_info["indv"]
                     for root, dirs, files in os.walk(self.results_dir):
                         if os.path.basename(root) == indv_dir:
                             for f in files:
                                 if f.endswith(".png") and indv_keyword in f:
-                                    print(f"Found individual plot: {f}")
-                                    file_paths.append(os.path.join(root, f))
+                                    file_path = os.path.join(root, f)
+                                    if self._should_include_file(f, file_path, show_whole_image, show_roi_data):
+                                        file_paths.append(file_path)
                 else:
                     # Show only summary plots
-                    print(f"Looking for summary plots for {selected_type}...")
                     for root, dirs, files in os.walk(self.results_dir):
                         for f in files:
                             if f.endswith(".png") and keyword_info["mean"] in f:
-                                print(f"Found summary plot: {f}")
-                                file_paths.append(os.path.join(root, f))
+                                file_path = os.path.join(root, f)
+                                if self._should_include_file(f, file_path, show_whole_image, show_roi_data):
+                                    file_paths.append(file_path)
                                     
         return sorted(file_paths)
+
+    def _should_include_file(self, filename, file_path, show_whole_image, show_roi_data):
+        """Determine if a file should be included based on data source selection."""
+        # Normalize path separators for consistent checking
+        normalized_path = file_path.replace("\\", "/")
+        path_parts = normalized_path.split("/")
+        
+        # Check if file is in an ROI subdirectory or has ROI in filename
+        is_roi_file = False
+        for part in path_parts:
+            if part.startswith("ROI_"):
+                is_roi_file = True
+                break
+        
+        # Also check filename directly
+        if "ROI_" in filename or "roi_" in filename.lower():
+            is_roi_file = True
+        
+        # Include file based on selection
+        if is_roi_file:
+            return show_roi_data
+        else:
+            return show_whole_image
 
     def display_image(self, canvas, image_path):
         """Load and display an image on the given canvas."""
@@ -314,7 +423,6 @@ class PostProcessingTab(QWidget):
             fig.tight_layout()
             canvas.draw()
         except Exception as e:
-            print(f"Error displaying image {image_path}: {e}")
             # Handle error without affecting original file
             fig = canvas.figure
             fig.clear()
@@ -368,106 +476,7 @@ class PostProcessingTab(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load CSV file: {e}")
 
-    def display_roi_results(self, roi_selection="All ROIs"):
-        """Display ROI measurement results"""
-        if not hasattr(self, 'roi_results') or self.roi_results is None:
-            self.status_label.setText("No ROI measurements available")
-            return
-
-        # Clear existing display
-        while self.results_layout.count() > 0:
-            item = self.results_layout.takeAt(0)
-            if item.widget():
-                item.widget().setParent(None)
-                item.widget().deleteLater()
-
-        # Create table widget
-        table = QTableWidget()
-        
-        if roi_selection == "All ROIs":
-            # Show all ROI measurements
-            df = self.roi_results
-        else:
-            # Show measurements for specific ROI
-            roi_id = int(roi_selection.split("_")[1])
-            df = self.roi_results[self.roi_results['ROI_ID'] == roi_id]
-
-        # Set up table dimensions
-        table.setRowCount(len(df))
-        table.setColumnCount(len(df.columns))
-        table.setHorizontalHeaderLabels(df.columns)
-
-        # Fill table with data
-        for i, (_, row) in enumerate(df.iterrows()):
-            for j, value in enumerate(row):
-                table.setItem(i, j, QTableWidgetItem(str(value)))
-
-        # Adjust table size
-        table.resizeColumnsToContents()
-        table.setMinimumWidth(min(sum([table.columnWidth(i) for i in range(table.columnCount())]) + 50, 800))
-        table.setMinimumHeight(min(table.rowHeight(0) * (len(df) + 1) + 50, 600))
-
-        # Add to layout
-        self.results_layout.addWidget(table)
-        self.results_layout.addStretch()
-        """Display results specific to the selected ROI."""
-        if not self.results is None and hasattr(self.parent, 'crops') and self.parent.crops:
-            # Clear existing display while preserving original data
-            while self.results_layout.count() > 0:
-                item = self.results_layout.takeAt(0)
-                if item.widget():
-                    widget = item.widget()
-                    widget.setParent(None)  # Detach from layout without deleting
-                    widget.deleteLater()  # Schedule for deletion after display is updated
-
-            # Create a table widget to display results
-            table_widget = QTableWidget()
-            
-            if roi_selection == "All ROIs":
-                # Show results for all ROIs
-                display_data = pd.DataFrame()
-                for i, roi in enumerate(self.parent.crops):
-                    roi_data = pd.DataFrame({"ROI": [f"ROI_{i+1}"],
-                                          "X_min": [roi[:, 0].min()],
-                                          "X_max": [roi[:, 0].max()],
-                                          "Y_min": [roi[:, 1].min()],
-                                          "Y_max": [roi[:, 1].max()],
-                                          "Area": [len(roi)]})
-                    display_data = pd.concat([display_data, roi_data], ignore_index=True)
-            else:
-                # Show data for specific ROI
-                roi_idx = int(roi_selection.split("_")[1]) - 1
-                roi = self.parent.crops[roi_idx]
-                display_data = pd.DataFrame({"Parameter": ["X_min", "X_max", "Y_min", "Y_max", "Area"],
-                                           "Value": [roi[:, 0].min(), roi[:, 0].max(),
-                                                   roi[:, 1].min(), roi[:, 1].max(),
-                                                   len(roi)]})
-
-            # Set up table dimensions
-            rows = len(display_data)
-            cols = len(display_data.columns)
-            headers = display_data.columns
-
-            table_widget.setRowCount(rows)
-            table_widget.setColumnCount(cols)
-            table_widget.setHorizontalHeaderLabels(headers)
-
-            # Fill the table with data
-            for i in range(rows):
-                for j, col in enumerate(headers):
-                    value = display_data.iloc[i][col]
-                    table_widget.setItem(i, j, QTableWidgetItem(str(value)))
-
-            # Add the table to the layout
-            self.results_layout.addWidget(table_widget)
-            
-            # Add stretch to keep everything aligned
-            self.results_layout.addStretch()
-
-    def on_roi_selection_changed(self):
-        """Handle changes in ROI selection."""
-        if self.display_combo.currentText() == "ROIs" and self.has_roi_results:
-            self.display_roi_results(self.roi_selector.currentText())
+    # ROI-specific methods removed as ROIs are now processed automatically with analysis
 
     def set_acf_visibility(self, visible):
         """Set visibility of the Individual ACF button."""
@@ -491,36 +500,33 @@ class PostProcessingTab(QWidget):
         # Show/hide individual plot checkbox based on display type
         self.show_individual.setVisible(display_type in ["ACF Plots", "CCF Plots", "Peak Properties"])
         
-        if display_type == "ROIs":
-            # Show ROI selector and results for ROIs view
-            if self.parent and hasattr(self.parent, 'crops') and self.parent.crops:
-                self.has_roi_results = True
-                self.roi_selector.clear()
-                self.roi_selector.addItem("All ROIs")
-                for i in range(len(self.parent.crops)):
-                    self.roi_selector.addItem(f"ROI_{i+1}")
-                self.roi_selector.setVisible(True)
-                self.display_roi_results(self.roi_selector.currentText())
-            else:
-                self.has_roi_results = False
-                self.roi_selector.setVisible(False)
-                if self.results_dir and os.path.exists(self.results_dir):
-                    self.show_results()
+        # Show/hide data source selection based on display type
+        # For Summary, show everything; for plots, allow filtering
+        if display_type == "Summary":
+            self.data_source_widget.setVisible(False)
         else:
-            # Hide ROI selector for other views
-            self.roi_selector.setVisible(False)
-            if self.results_dir and os.path.exists(self.results_dir):
-                self.show_results()
-                print(f"Showing results for type: {display_type}")
-            else:
-                print("No results directory set or directory does not exist")
+            self.data_source_widget.setVisible(True)
+        
+        if self.results_dir and os.path.exists(self.results_dir):
+            self.show_results()
                 
     def on_show_individual_changed(self, state):
         """Handle changes in the individual plots checkbox."""
-        print(f"\nIndividual plots checkbox changed to: {'checked' if state else 'unchecked'}")
-        print(f"Current display type: {self.display_combo.currentText()}")
         if self.results_dir and os.path.exists(self.results_dir):
             self.show_results()  # This will update the display based on current selection
+    
+    def on_data_source_changed(self, state):
+        """Handle changes in data source selection (whole image vs ROI)."""
+        # Ensure at least one option is selected
+        if not self.whole_image_checkbox.isChecked() and not self.roi_data_checkbox.isChecked():
+            # If user unchecked the last option, recheck it
+            sender = self.sender()
+            sender.setChecked(True)
+            return
+        
+        # Update display if results are available
+        if self.results_dir and os.path.exists(self.results_dir):
+            self.show_results()
 
     def export_plots(self):
         """Export plots based on selected options."""
