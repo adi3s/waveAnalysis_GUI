@@ -1,716 +1,1001 @@
 import os
+import json
 from pathlib import Path
+import numpy as np
+import pandas as pd
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QGroupBox,
     QLabel, QFileDialog, QMessageBox, QComboBox, QCheckBox,
-    QSpinBox, QListWidget, QLineEdit, QSplitter, QProgressBar
+    QSpinBox, QListWidget, QLineEdit, QSplitter, QProgressBar,
+    QScrollArea
 )
 from qtpy.QtCore import Signal, Qt, QThread
-import numpy as np
-import pandas as pd
-import json
-import os
-import numpy as np
-import pandas as pd
-import json
-import os
-
-class MeasurementProcess(QThread):
-    """Worker thread for processing measurements to avoid UI freezing"""
-    progress = Signal(int)
-    finished = Signal(list)
-    error = Signal(str)
-    
-    def __init__(self, image_data, roi_layer, process_all_frames=False, channel_mode="First", frame_interval=1):
-        super().__init__()
-        self.image_data = image_data
-        self.roi_layer = roi_layer
-        self.process_all_frames = process_all_frames
-        self.channel_mode = channel_mode
-        self.frame_interval = frame_interval
-    
-    def run(self):
-        try:
-            results = []
-            if self.process_all_frames and self.image_data.ndim >= 3:
-                total_frames = self.image_data.shape[0]
-                frame_indices = range(0, total_frames, self.frame_interval)
-            else:
-                frame_indices = [None]
-            
-            # Process each frame
-            for i, frame_idx in enumerate(frame_indices):
-                frame_results = self.process_frame(frame_idx)
-                if frame_results:
-                    results.extend(frame_results)
-                self.progress.emit(int((i + 1) / len(frame_indices) * 100))
-            
-            if results:
-                self.finished.emit(results)
-            else:
-                self.error.emit("No measurements were generated")
-                
-        except Exception as e:
-            import traceback
-            error_msg = f"Error in measurement worker: {str(e)}\n{traceback.format_exc()}"
-            self.error.emit(error_msg)
-
-    def process_frame(self, frame_idx):
-        """Process all ROIs for a specific frame"""
-        frame_results = []
-        
-        try:
-            if frame_idx is not None and self.image_data.ndim >= 3:
-                frame_data = self.image_data[frame_idx]
-            else:
-                frame_data = self.image_data
-
-            if frame_data.ndim > 2:
-                # Ensure we're working with the right dimensions
-                if len(frame_data.shape) == 4:  # If we have (time, channel, height, width)
-                    frame_data = frame_data[0]  # Take first timepoint if it exists
-                
-                if self.channel_mode == "Max Projection":
-                    frame_data = np.max(frame_data, axis=0)
-                elif self.channel_mode == "Mean Projection":
-                    frame_data = np.mean(frame_data, axis=0)
-                else:  # "First" or specific channel
-                    frame_data = frame_data[0] if frame_data.ndim > 2 else frame_data
-                
-                if frame_data.ndim != 2:  # Ensure we have a 2D image
-                    print(f"[MeasurementWorker] Unexpected data shape after processing: {frame_data.shape}")
-                    frame_data = frame_data.squeeze()
-                    if frame_data.ndim > 2:
-                        frame_data = frame_data[0]
-            for i, roi in enumerate(self.roi_layer.data):
-                vertices = np.array(roi)
-                if vertices.shape[0] > 0:
-                    # Get bounding box
-                    x_min, y_min = np.min(vertices, axis=0)
-                    x_max, y_max = np.max(vertices, axis=0)
-                    
-                    # Convert to integers and ensure within image bounds
-                    h, w = frame_data.shape[-2:]
-                    x_min = max(0, int(x_min))
-                    x_max = min(w, int(x_max))
-                    y_min = max(0, int(y_min))
-                    y_max = min(h, int(y_max))
-                    
-                    if x_min < x_max and y_min < y_max:  # Valid region
-                        # Extract ROI region
-                        roi_data = frame_data[y_min:y_max, x_min:x_max]
-                        
-                        # Create mask for non-rectangular ROIs
-                        if vertices.shape != (4, 2):  # Non-rectangular ROI
-                            from skimage import draw
-                            mask = np.zeros((y_max - y_min, x_max - x_min), dtype=bool)
-                            roi_vertices = vertices - np.array([x_min, y_min])
-                            rr, cc = draw.polygon(roi_vertices[:, 1], roi_vertices[:, 0])
-                            valid = (rr >= 0) & (rr < mask.shape[0]) & (cc >= 0) & (cc < mask.shape[1])
-                            mask[rr[valid], cc[valid]] = True
-                            roi_data = roi_data[mask]
-                        
-                        if roi_data.size > 0:
-                            result = {
-                                'Frame': frame_idx if frame_idx is not None else 0,
-                                'ROI_ID': i + 1,
-                                'Mean_Intensity': float(np.mean(roi_data)),
-                                'Max_Intensity': float(np.max(roi_data)),
-                                'Min_Intensity': float(np.min(roi_data)),
-                                'Std_Intensity': float(np.std(roi_data)),
-                                'Area': roi_data.size,
-                                'X_min': x_min,
-                                'X_max': x_max,
-                                'Y_min': y_min,
-                                'Y_max': y_max
-                            }
-                            frame_results.append(result)
-            
-        except Exception as e:
-            import traceback
-            print(traceback.format_exc())
-            
-        return frame_results
-
+from napari_roi_manager import QRoiManager
 
 class ROITab(QWidget):
-    """Tab for loading images and saving ROIs in Napari viewer"""
-    measurements_ready = Signal(pd.DataFrame)  # Signal when ROI measurements are ready
-    roi_saved = Signal(list)  # Signal when ROIs are saved
+    """
+    Tab for managing ROIs in Napari viewer using napari_roi_manager.
+    
+    This widget provides a comprehensive interface for:
+    - Initializing and managing ROI tools
+    - Creating, saving, and loading ROIs
+    - Calculating measurements on ROI regions
+    - Handling fallback functionality when napari-roi-manager is unavailable
+    
+    Signals:
+        measurements_ready: Emitted when ROI measurements are calculated
+        roi_saved: Emitted when ROIs are saved to file
+        roi_updated: Emitted when ROI data is updated
+    """
+    measurements_ready = Signal(pd.DataFrame)
+    roi_saved = Signal(list)
+    roi_updated = Signal(object, object)
 
     def __init__(self, parent):
-        """Initialize the ROITab with the parent widget"""
         super().__init__(parent)
         self.parent = parent
         self.viewer = parent.viewer
         self.current_image_path = None
-        self.saved_rois = {}  # Store ROIs per image
-        self.roi_layer = None  # Current ROI layer
-        self.roi_list = QListWidget()  # List to show ROIs
-        self.measurement_worker = None
+        self.saved_rois = {}
+        self.roi_manager = None
+        self.roi_manager_initialized = False
+        self.roi_layer = None  # For fallback ROI layer
         self.init_ui()
 
     def init_ui(self):
-        """Initialize the user interface for the ROITab"""
+        """Initialize the user interface with scrollable layout and organized sections."""
+        # Create main layout
+        main_layout = QVBoxLayout()
+        
+        # Create scroll area for the entire widget
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setFrameShape(QScrollArea.NoFrame)  # Remove frame for cleaner look
+        
+        # Create container widget for the scroll area
+        scroll_content = QWidget()
         layout = QVBoxLayout()
-
-        # Create a splitter for better layout
-        splitter = QSplitter(Qt.Horizontal)
-
-        # Left panel: ROI list and operations
-        left_widget = QWidget()
-        left_layout = QVBoxLayout()
-
-        # ROI management group
-        roi_group = QGroupBox("ROI Management")
-        roi_layout = QVBoxLayout()
         
-        # ROI list
-        roi_layout.addWidget(QLabel("ROIs:"))
-        self.roi_list.itemSelectionChanged.connect(self.on_roi_selection_changed)
-        roi_layout.addWidget(self.roi_list)
+        # ROI Manager Setup section
+        setup_group = QGroupBox("ROI Manager Setup")
+        setup_layout = QVBoxLayout()
         
-        # ROI operations
+        self.setup_instructions = QLabel(
+            "1. Load an image in your application\n"
+            "2. Click 'Initialize ROI Manager' to set up ROI annotation\n"
+            "3. Use the ROI manager tools to draw and manage ROIs"
+        )
+        self.setup_instructions.setWordWrap(True)
+        setup_layout.addWidget(self.setup_instructions)
+        
+        self.init_roi_btn = QPushButton("Initialize ROI Manager")
+        self.init_roi_btn.clicked.connect(self.initialize_roi_manager)
+        setup_layout.addWidget(self.init_roi_btn)
+        
+        self.status_label = QLabel("Status: Not initialized")
+        setup_layout.addWidget(self.status_label)
+        
+        setup_group.setLayout(setup_layout)
+        layout.addWidget(setup_group)
+        
+        # ROI Manager widget container with scroll area (initially hidden)
+        self.roi_manager_container = QScrollArea()
+        self.roi_manager_container.setWidgetResizable(True)
+        self.roi_manager_container.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.roi_manager_container.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.roi_manager_container.setMaximumHeight(300)  # Set max height for scrolling
+        self.roi_manager_container.setVisible(False)
+        layout.addWidget(self.roi_manager_container)
+        
+        # ROI operations group
+        roi_ops_group = QGroupBox("ROI Operations")
         roi_ops_layout = QHBoxLayout()
-        self.create_roi_btn = QPushButton("Create ROI Layer")
-        self.create_roi_btn.clicked.connect(self.create_roi_layer)
-        self.delete_roi_btn = QPushButton("Delete Selected")
-        self.delete_roi_btn.clicked.connect(self.delete_selected_roi)
-        self.delete_roi_btn.setEnabled(False)
         
-        roi_ops_layout.addWidget(self.create_roi_btn)
-        roi_ops_layout.addWidget(self.delete_roi_btn)
-        roi_layout.addLayout(roi_ops_layout)
-        
-        # Save operations
-        save_layout = QHBoxLayout()
         self.save_rois_btn = QPushButton("Save ROIs")
         self.save_rois_btn.clicked.connect(self.save_rois)
-        save_layout.addWidget(self.save_rois_btn)
-        roi_layout.addLayout(save_layout)
+        self.save_rois_btn.setEnabled(False)  # Initially disabled
         
-        roi_group.setLayout(roi_layout)
-        left_layout.addWidget(roi_group)
-
-        # Measurement options group
-        measure_group = QGroupBox("Measurement Options")
-        measure_layout = QVBoxLayout()
+        self.refresh_rois_btn = QPushButton("Refresh ROIs")
+        self.refresh_rois_btn.clicked.connect(self.refresh_rois)
+        self.refresh_rois_btn.setEnabled(False)  # Initially disabled
         
-        # Measurement options
-        # Channel options
-        channel_layout = QHBoxLayout()
-        channel_layout.addWidget(QLabel("Channel:"))
-        self.channel_combo = QComboBox()
-        self.channel_combo.addItems(["First", "Max Projection", "Mean Projection"])
-        channel_layout.addWidget(self.channel_combo)
-        measure_layout.addLayout(channel_layout)
+        # Auto-save option
+        self.auto_save_check = QCheckBox("Auto-save ROIs on changes")
+        self.auto_save_check.setChecked(True)
+        self.auto_save_check.setEnabled(False)  # Initially disabled
         
-        # Frame options for time series
-        frame_layout = QHBoxLayout()
-        self.process_all_frames = QCheckBox("Process all frames")
-        self.process_all_frames.setChecked(True)
-        frame_layout.addWidget(self.process_all_frames)
+        roi_ops_layout.addWidget(self.save_rois_btn)
+        roi_ops_layout.addWidget(self.refresh_rois_btn)
+        roi_ops_layout.addWidget(self.auto_save_check)
+        roi_ops_group.setLayout(roi_ops_layout)
+        layout.addWidget(roi_ops_group)
         
-        frame_layout.addWidget(QLabel("Frame interval:"))
-        self.frame_interval = QSpinBox()
-        self.frame_interval.setMinimum(1)
-        self.frame_interval.setMaximum(1000)
-        self.frame_interval.setValue(1)
-        frame_layout.addWidget(self.frame_interval)
-        measure_layout.addLayout(frame_layout)
+        # Fallback for when napari-roi-manager has issues
+        self.fallback_container = QWidget()
+        fallback_layout = QVBoxLayout()
+        
+        fallback_instructions = QLabel(
+            "napari-roi-manager encountered an issue. Using fallback ROI tools.\n\n"
+            "1. Create an ROI layer using the button below\n"
+            "2. Use napari's rectangle tool to draw ROIs\n"
+            "3. ROIs will be available for measurement"
+        )
+        fallback_instructions.setWordWrap(True)
+        fallback_layout.addWidget(fallback_instructions)
+        
+        self.create_roi_btn = QPushButton("Create ROI Layer")
+        self.create_roi_btn.clicked.connect(self.create_fallback_roi_layer)
+        fallback_layout.addWidget(self.create_roi_btn)
+        
+        self.fallback_container.setLayout(fallback_layout)
+        self.fallback_container.setVisible(False)
+        layout.addWidget(self.fallback_container)
         
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
-        measure_layout.addWidget(self.progress_bar)
+        layout.addWidget(self.progress_bar)
         
-        # Measure button
-        self.measure_btn = QPushButton("Calculate Measurements")
-        self.measure_btn.clicked.connect(self.calculate_measurements)
-        measure_layout.addWidget(self.measure_btn)
+        # Add stretch to prevent excessive vertical expansion
+        layout.addStretch()
         
-        measure_group.setLayout(measure_layout)
-        left_layout.addWidget(measure_group)
+        # Set up scroll area
+        scroll_content.setLayout(layout)
+        scroll_area.setWidget(scroll_content)
         
-        left_widget.setLayout(left_layout)
-        splitter.addWidget(left_widget)
+        # Add scroll area to main layout
+        main_layout.addWidget(scroll_area)
+        self.setLayout(main_layout)
         
-        layout.addWidget(splitter)
-        self.setLayout(layout)
+        # Set size constraints for the widget
+        self.setMinimumSize(400, 300)
+        self.setMaximumSize(800, 600)  # Reasonable maximum size
+        self.resize(500, 450)  # Default size
 
-    def calculate_measurements(self):
-        """Calculate measurements for all ROIs"""
-        if self.measurement_worker is not None and self.measurement_worker.isRunning():
+    def initialize_roi_manager(self):
+        """
+        Initialize the napari-roi-manager with error handling and fallback support.
+        
+        Attempts to create QRoiManager instance, connects signals, and enables
+        UI controls. Falls back to basic shapes layer if initialization fails.
+        """
+        if self.roi_manager_initialized:
             return
-            
-        if self.roi_layer is None or len(self.roi_layer.data) == 0:
-            QMessageBox.warning(self, "No ROIs", "Please create some ROIs first.")
-            return
-
-        # First check if we have a valid image path
-        if not self.current_image_path:
-            QMessageBox.warning(self, "No Image", "Please load an image first in the Values tab.")
-            return
-
-        # Get the current image data
-        image_layer = None
+        
+        # Check if an image is loaded
+        has_image = False
         for layer in self.viewer.layers:
-            # Look for layer with name matching our image
-            if (layer.__class__.__name__ == 'Image' and 
-                layer.name == os.path.basename(self.current_image_path)):
-                image_layer = layer
+            if hasattr(layer, 'data') and layer.__class__.__name__ == 'Image':
+                has_image = True
                 break
-
-        # If not found, try getting the first image layer
-        if image_layer is None:
-            for layer in self.viewer.layers:
-                if layer.__class__.__name__ == 'Image':
-                    image_layer = layer
-                    break
-
-        if image_layer is None:
-            QMessageBox.warning(self, "No Image", "No image found to measure. Please load an image in the Values tab.")
+        
+        if not has_image:
+            QMessageBox.warning(self, "No Image", "Please load an image first before initializing ROI manager.")
             return
-
-        try:
-            self.measure_btn.setEnabled(False)
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setValue(0)
-            
-            self.measurement_worker = MeasurementProcess(
-                image_data=image_layer.data,
-                roi_layer=self.roi_layer,
-                process_all_frames=self.process_all_frames.isChecked(),
-                channel_mode=self.channel_combo.currentText(),
-                frame_interval=self.frame_interval.value()
-            )
-            
-            # Connect signals
-            self.measurement_worker.progress.connect(self.progress_bar.setValue)
-            self.measurement_worker.finished.connect(self.on_measurements_finished)
-            self.measurement_worker.error.connect(self.on_measurements_error)
-            
-            # Start processing
-            self.measurement_worker.start()
-            
-        except Exception as e:
-            self.measure_btn.setEnabled(True)
-            self.progress_bar.setVisible(False)
-            QMessageBox.critical(self, "Error", f"Failed to start measurements: {str(e)}")
-
-    def _process_frame(self, image_data, frame_idx, rois, channel_mode):
-        """Process ROIs for a specific frame"""
-        frame_results = []
         
         try:
-            # Extract frame data
-            if frame_idx is not None and image_data.ndim >= 3:
-                print(f"Extracting frame {frame_idx} from {image_data.shape} data")
-                frame_data = image_data[frame_idx]
-            else:
-                frame_data = image_data
-
-            # Handle multi-channel data
-            if frame_data.ndim > 2:
-                print(f"Processing multi-channel data with shape {frame_data.shape}")
-                # Ensure we're working with the right dimensions
-                if len(frame_data.shape) == 4:  # If we have (time, channel, height, width)
-                    frame_data = frame_data[0]  # Take first timepoint if it exists
-                
-                if channel_mode == "Max Projection":
-                    frame_data = np.max(frame_data, axis=0)
-                elif channel_mode == "Mean Projection":
-                    frame_data = np.mean(frame_data, axis=0)
-                else:  # "First" or specific channel
-                    frame_data = frame_data[0] if frame_data.ndim > 2 else frame_data  # Take first channel
-                
-                print(f"After channel processing, shape: {frame_data.shape}")
-                if frame_data.ndim != 2:  # Ensure we have a 2D image
-                    print(f"Warning: Unexpected data shape after processing: {frame_data.shape}")
-                    frame_data = frame_data.squeeze()  # Remove any singleton dimensions
-                    if frame_data.ndim > 2:
-                        frame_data = frame_data[0]  # Take first slice if still multi-dimensional
-                print(f"Final frame shape: {frame_data.shape}")
-
-            # Process each ROI
-            for i, roi in enumerate(rois):
-                print(f"Processing ROI {i+1}")
-                # Extract ROI coordinates
-                vertices = np.array(roi)
-                print(f"ROI shape: {vertices.shape}")
-                
-                # Handle different ROI shapes
-                if vertices.shape[0] > 0:  # Check if ROI has any points
-                    # Get bounding box
-                    x_min, y_min = np.min(vertices, axis=0)
-                    x_max, y_max = np.max(vertices, axis=0)
-                    
-                    # Convert to integers and ensure within image bounds
-                    h, w = frame_data.shape[-2:]  # Get image dimensions
-                    x_min = max(0, int(x_min))
-                    x_max = min(w, int(x_max))
-                    y_min = max(0, int(y_min))
-                    y_max = min(h, int(y_max))
-                    
-                    if x_min < x_max and y_min < y_max:  # Valid region
-                        # Extract ROI region
-                        roi_data = frame_data[y_min:y_max, x_min:x_max]
-                        
-                        # Create mask for non-rectangular ROIs
-                        if vertices.shape != (4, 2):  # Non-rectangular ROI
-                            print("Creating mask for non-rectangular ROI")
-                            from skimage import draw
-                            mask = np.zeros((y_max - y_min, x_max - x_min), dtype=bool)
-                            roi_vertices = vertices - np.array([x_min, y_min])  # Adjust vertices
-                            rr, cc = draw.polygon(roi_vertices[:, 1], roi_vertices[:, 0])
-                            valid = (rr >= 0) & (rr < mask.shape[0]) & (cc >= 0) & (cc < mask.shape[1])
-                            mask[rr[valid], cc[valid]] = True
-                            roi_data = roi_data[mask]
-                        
-                        if roi_data.size > 0:  # Check if we have valid data
-                            # Calculate statistics
-                            result = {
-                                'Frame': frame_idx if frame_idx is not None else 0,
-                                'ROI_ID': i + 1,
-                                'Mean_Intensity': float(np.mean(roi_data)),
-                                'Max_Intensity': float(np.max(roi_data)),
-                                'Min_Intensity': float(np.min(roi_data)),
-                                'Std_Intensity': float(np.std(roi_data)),
-                                'Area': roi_data.size,  # Use actual pixel count
-                                'X_min': x_min,
-                                'X_max': x_max,
-                                'Y_min': y_min,
-                                'Y_max': y_max
-                            }
-                            frame_results.append(result)
-                            print(f"ROI {i+1} measurements calculated:")
-                            print(f"- Shape: {roi_data.shape}")
-                            print(f"- Mean: {result['Mean_Intensity']}")
-                            print(f"- Min: {result['Min_Intensity']}")
-                            print(f"- Max: {result['Max_Intensity']}")
-                            print(f"- Std: {result['Std_Intensity']}")
-                            print(f"- Area: {result['Area']}")
-                    else:
-                        print(f"ROI {i+1} has invalid dimensions")
-                else:
-                    print(f"ROI {i+1} has no points")
+            # Clean up any existing ROI layers
+            self.cleanup_existing_roi_layers()
+            
+            # Create the ROI Manager
+            self.roi_manager = QRoiManager(self.viewer)
+            
+            # Create a container widget for the scroll area
+            container_widget = QWidget()
+            container_layout = QVBoxLayout()
+            container_layout.addWidget(self.roi_manager)
+            container_widget.setLayout(container_layout)
+            
+            # Add to scroll area
+            self.roi_manager_container.setWidget(container_widget)
+            self.roi_manager_container.setVisible(True)
+            self.fallback_container.setVisible(False)
+            
+            # Check for existing ROI files and offer to load them
+            self.check_and_offer_existing_rois()
+            
+            # Connect ROI manager signals if available
+            try:
+                if hasattr(self.roi_manager, 'roi_changed'):
+                    self.roi_manager.roi_changed.connect(self.on_roi_changed)
+                elif hasattr(self.roi_manager, 'event') and hasattr(self.roi_manager.event, 'roi_changed'):
+                    self.roi_manager.event.roi_changed.connect(self.on_roi_changed)
+            except Exception:
+                pass  # Silently handle signal connection failures
+            
+            # Try to get the ROI layer created by the manager and connect to its events
+            self.connect_to_roi_layer()
+            
+            # Enable the operation buttons
+            self.save_rois_btn.setEnabled(True)
+            self.refresh_rois_btn.setEnabled(True)
+            self.auto_save_check.setEnabled(True)
+            
+            # Update status and button
+            self.status_label.setText("Status: ROI Manager initialized successfully")
+            self.init_roi_btn.setText("ROI Manager Initialized")
+            self.init_roi_btn.setEnabled(False)
+            self.roi_manager_initialized = True
+            
+            QMessageBox.information(self, "Success", "ROI Manager initialized successfully! You can now create and manage ROIs.")
             
         except Exception as e:
-            import traceback
-            print(f"Error processing frame {frame_idx}:")
-            print(traceback.format_exc())
-            raise
+            error_msg = f"Error initializing QRoiManager: {str(e)}"
+            self.status_label.setText(f"Status: {error_msg}")
             
-        return frame_results
+            # Fall back to simple ROI manager
+            self.fallback_container.setVisible(True)
+            self.roi_manager_container.setVisible(False)
+            QMessageBox.warning(self, "ROI Manager Error", 
+                              f"Failed to initialize napari-roi-manager: {error_msg}\n\n"
+                              "Using fallback ROI tools instead.")
+        except ImportError as e:
+            # Handle case where QRoiManager is not available
+            error_msg = "napari-roi-manager not available"
+            self.status_label.setText(f"Status: {error_msg}")
+            
+            # Use fallback ROI manager
+            self.fallback_container.setVisible(True)
+            self.roi_manager_container.setVisible(False)
+            QMessageBox.information(self, "Fallback Mode", 
+                                  "napari-roi-manager not available. Using fallback ROI tools.")
+            self.roi_manager_initialized = True  # Mark as initialized to enable fallback functionality
 
-    def auto_save_rois(self):
-        """Automatically save ROIs when changes occur"""
+    def connect_to_roi_layer(self):
+        """Connect to the ROI layer created by the ROI manager."""
+        try:
+            # Look for RoiManagerLayer first (from napari-roi-manager)
+            for layer in self.viewer.layers:
+                if type(layer).__name__ == 'RoiManagerLayer':
+                    # Connect to the layer's data change events
+                    if hasattr(layer.events, 'data'):
+                        layer.events.data.connect(self.on_shapes_layer_changed)
+                    if hasattr(layer.events, 'current_properties'):
+                        layer.events.current_properties.connect(self.on_shapes_layer_changed)
+                    # Try other common event names for roi manager layers
+                    if hasattr(layer.events, 'roi_changed'):
+                        layer.events.roi_changed.connect(self.on_shapes_layer_changed)
+                    if hasattr(layer.events, 'current_roi'):
+                        layer.events.current_roi.connect(self.on_shapes_layer_changed)
+                    return  # Connected to roi manager layer
+            
+            # Look for standard shapes layers that might be created by the ROI manager
+            for layer in self.viewer.layers:
+                if hasattr(layer, 'data') and type(layer).__name__ == 'Shapes':
+                    # Connect to the layer's data change events
+                    layer.events.data.connect(self.on_shapes_layer_changed)
+                    # Also connect to selection events to trigger updates
+                    if hasattr(layer.events, 'current_properties'):
+                        layer.events.current_properties.connect(self.on_shapes_layer_changed)
+                    # This is likely the ROI layer
+                    break
+        except Exception as e:
+            pass
+
+    def on_shapes_layer_changed(self, event=None):
+        """Handle changes to shapes layer data."""
+        try:
+            # Small delay to ensure shape is fully added
+            from qtpy.QtCore import QTimer
+            QTimer.singleShot(100, self.delayed_roi_check)
+        except Exception as e:
+            pass
+
+    def delayed_roi_check(self):
+        """Delayed ROI check to ensure shapes are fully processed."""
+        try:
+            # Check for ROIs and create image layers
+            rois = self.get_rois_data()
+            if rois:
+                # Call the original ROI changed handler
+                self.on_roi_changed()
+        except Exception as e:
+            pass
+
+    def create_fallback_roi_layer(self):
+        """Create a fallback ROI layer when napari-roi-manager is not available"""
+        # Clean up any existing ROI layers
+        self.cleanup_existing_roi_layers()
+        
+        # Create new ROI layer
+        self.roi_layer = self.viewer.add_shapes(
+            name="ROIs",
+            shape_type='rectangle',
+            edge_color='red',
+            face_color='red',
+            opacity=0.3
+        )
+        
+        # Connect to data change event
+        self.roi_layer.events.data.connect(self.on_shapes_layer_changed)
+        
+        # Enable operation buttons
+        self.save_rois_btn.setEnabled(True)
+        self.refresh_rois_btn.setEnabled(True)
+        self.auto_save_check.setEnabled(True)
+        
+        self.status_label.setText("Status: Fallback ROI layer created")
+        self.init_roi_btn.setText("ROI Layer Created")
+        self.init_roi_btn.setEnabled(False)
+        self.roi_manager_initialized = True
+        
+        QMessageBox.information(self, "Success", 
+                              "Fallback ROI layer created successfully!\n\n"
+                              "You can now use napari's rectangle tool to draw ROIs.")
+
+    def cleanup_existing_roi_layers(self):
+        """Clean up any existing ROI layers to avoid duplicates"""
+        layers_to_remove = []
+        for layer in self.viewer.layers:
+            if hasattr(layer, 'name'):
+                layer_name = layer.name.lower()
+                if ('roi' in layer_name or 
+                    layer_name.startswith('roi_') or 
+                    'roiManagerLayer' in type(layer).__name__.lower() or
+                    (hasattr(layer, 'shape_type') and type(layer).__name__ == 'Shapes')):
+                    layers_to_remove.append(layer)
+        
+        for layer in layers_to_remove:
+            try:
+                self.viewer.layers.remove(layer)
+            except Exception:
+                pass  # Silently handle layer removal errors
+
+    def check_and_offer_existing_rois(self):
+        """Check for existing ROI files and offer to load them automatically"""
         if not self.current_image_path:
             return
-            
+        
         try:
-            self.save_rois(auto=True)
-        except Exception as e:
-            print(f"Auto-save failed: {str(e)}")
+            # Check if ROI file exists for current image
+            roi_dir = os.path.join(os.path.dirname(self.current_image_path), 'ROI_management')
+            image_name = os.path.splitext(os.path.basename(self.current_image_path))[0]
+            roi_file = os.path.join(roi_dir, f"{image_name}_ROIs.json")
+            
+            if os.path.exists(roi_file):
+                # Check if the ROI file has content
+                try:
+                    with open(roi_file, 'r') as f:
+                        data = json.load(f)
+                    
+                    rois = data.get('rois', [])
+                    if rois:
+                        # Ask user if they want to load existing ROIs
+                        reply = QMessageBox.question(
+                            self, 
+                            "Existing ROIs Found", 
+                            f"Found existing ROIs for {image_name} ({len(rois)} ROIs).\n\n"
+                            f"Would you like to automatically load them?",
+                            QMessageBox.Yes | QMessageBox.No,
+                            QMessageBox.Yes
+                        )
+                        
+                        if reply == QMessageBox.Yes:
+                            # Load the existing ROIs
+                            self.load_rois_data(rois)
+                            
+                            # Also create the visual ROI image layers
+                            self.create_roi_image_layers_from_saved_data(rois)
+                            
+                            # Force a refresh of the ROI display
+                            self.delayed_roi_check()
+                            
+                            # Refresh the viewer to ensure ROIs are visible
+                            try:
+                                self.viewer.reset_view()
+                            except Exception:
+                                pass
+                            
+                            # Update status
+                            self.status_label.setText(f"Status: Loaded {len(rois)} ROIs from saved data")
+                            
+                            QMessageBox.information(
+                                self, 
+                                "ROIs Loaded", 
+                                f"Successfully loaded {len(rois)} existing ROIs for {image_name}.\n\n"
+                                f"The ROI shapes should now be visible on the image as red rectangles."
+                            )
+                        
+                except (json.JSONDecodeError, Exception):
+                    pass  # Silently handle file reading errors
+                
+        except Exception:
+            pass  # Silently handle ROI file checking errors
+
+    def refresh_rois(self):
+        """Manually refresh ROI detection"""
+        rois = self.get_rois_data()
+        if rois:
+            # Count ROI image layers created
+            roi_layers = [layer for layer in self.viewer.layers 
+                         if hasattr(layer, 'name') and layer.name.startswith('ROI_')]
+            
+            message = f"Found {len(rois)} ROIs!\n"
+            message += f"Created {len(roi_layers)} ROI image layers.\n\n"
+            message += "ROI Details:\n"
+            for i, roi in enumerate(rois):
+                roi_type = roi.get('shape_type', roi.get('type', 'unknown'))
+                message += f"  ROI {i+1}: {roi_type}\n"
+            
+            QMessageBox.information(self, "ROIs Found", message)
+        else:
+            QMessageBox.warning(self, "No ROIs", 
+                              "No ROIs detected.\n\n"
+                              "Make sure you've drawn some ROIs using the napari tools.")
+            
+        # Also try to reconnect to shapes layers
+        self.connect_to_roi_layer()
+
+    def set_current_image(self, image_path):
+        """Set the current image path"""
+        self.current_image_path = image_path
+        if image_path:
+            # Update status to show image is loaded
+            if not self.roi_manager_initialized:
+                self.status_label.setText("Status: Image loaded - Ready to initialize ROI Manager")
+                self.init_roi_btn.setEnabled(True)
+            
+            # Clear existing ROIs when loading new image (if ROI manager exists)
+            if self.roi_manager:
+                try:
+                    self.roi_manager.clear_rois()
+                except Exception:
+                    pass  # Silently handle ROI clearing failures
 
     def save_rois(self, auto=False):
         """Save ROIs to a file"""
-        if self.roi_layer is None or len(self.roi_layer.data) == 0:
+        if not self.roi_manager_initialized or not self.roi_manager:
             if not auto:
-                QMessageBox.warning(self, "No ROIs", "No ROIs to save.")
+                QMessageBox.warning(self, "ROI Manager Not Ready", "Please initialize ROI Manager first.")
             return
-
+            
         if not self.current_image_path:
             if not auto:
                 QMessageBox.warning(self, "No Image", "No image loaded to associate ROIs with.")
             return
 
         try:
-            # Create ROI_management folder if it doesn't exist
+            # Get ROIs from ROI manager
+            rois = self.get_rois_data()
+            if not rois:
+                if not auto:
+                    QMessageBox.warning(self, "No ROIs", "No ROIs to save.")
+                return
+
+            # Create ROI_management folder
             roi_dir = os.path.join(os.path.dirname(self.current_image_path), 'ROI_management')
             os.makedirs(roi_dir, exist_ok=True)
 
-            # Create filename based on image name
+            # Save ROIs
             image_name = os.path.splitext(os.path.basename(self.current_image_path))[0]
             roi_file = os.path.join(roi_dir, f"{image_name}_ROIs.json")
 
-            # Convert ROIs to serializable format
-            roi_data = []
-            for roi in self.roi_layer.data:
-                roi_data.append(roi.tolist())
-
-            # Save to JSON
             data = {
                 'image_path': self.current_image_path,
-                'rois': roi_data,
+                'rois': rois,
                 'timestamp': pd.Timestamp.now().isoformat()
             }
             
             with open(roi_file, 'w') as f:
                 json.dump(data, f, indent=2)
 
-            # Store in memory
-            self.saved_rois[str(self.current_image_path)] = roi_data
-
             if not auto:
                 QMessageBox.information(self, "Success", f"ROIs saved to {roi_file}")
+            
+            # Convert ROIs to numpy arrays for the signal (workflows expect numpy arrays)
+            roi_arrays = []
+            for roi in rois:
+                if 'vertices' in roi:
+                    # Convert vertices list back to numpy array
+                    vertices = np.array(roi['vertices'])
+                    roi_arrays.append(vertices)
+            
+            # Emit signal with numpy arrays so main_gui can use them for analysis
+            if roi_arrays:
+                self.roi_saved.emit(roi_arrays)
                 
         except Exception as e:
             if not auto:
                 QMessageBox.critical(self, "Error", f"Failed to save ROIs: {str(e)}")
 
-        except Exception as e:
-            if not auto:
-                QMessageBox.critical(self, "Error", f"Failed to save ROIs: {str(e)}")
-
-    def load_rois(self):
-        """Load ROIs from a file"""
+    def get_rois_data(self):
+        """Get ROI data from the ROI manager in a safe way"""
+        if not self.roi_manager_initialized or not self.roi_manager:
+            return []
+            
         try:
-            if not self.current_image_path:
-                QMessageBox.warning(self, "No Image", "Please load an image first.")
-                return
-
-            # Look for ROI file in ROI_management folder
-            roi_dir = os.path.join(os.path.dirname(self.current_image_path), 'ROI_management')
-            image_name = os.path.splitext(os.path.basename(self.current_image_path))[0]
-            roi_file = os.path.join(roi_dir, f"{image_name}_ROIs.json")
-
-            if not os.path.exists(roi_file):
-                QMessageBox.warning(self, "No ROIs", f"No saved ROIs found for {image_name}")
-                return
-
-            # Load ROIs from file
-            with open(roi_file, 'r') as f:
-                data = json.load(f)
-
-            # Verify image path matches
-            if data['image_path'] != self.current_image_path:
-                response = QMessageBox.question(
-                    self, "Different Image",
-                    "These ROIs were saved for a different image. Load anyway?",
-                    QMessageBox.Yes | QMessageBox.No
-                )
-                if response == QMessageBox.No:
-                    return
-
-            # Create ROI layer if it doesn't exist
-            if self.roi_layer is None:
-                self.create_roi_layer()
-
-            # Convert loaded data back to numpy arrays
-            rois = [np.array(roi) for roi in data['rois']]
+            roi_data = []
             
-            # Update ROI layer with loaded ROIs
-            self.roi_layer.data = rois
+            # Method 1: Look for RoiManagerLayer (from napari-roi-manager)
+            for layer in self.viewer.layers:
+                if type(layer).__name__ == 'RoiManagerLayer':
+                    if len(layer.data) > 0:
+                        for i, roi in enumerate(layer.data):
+                            try:
+                                # Try to get ROI data in different ways
+                                if hasattr(roi, 'vertices') or hasattr(roi, 'data'):
+                                    vertices = getattr(roi, 'vertices', getattr(roi, 'data', None))
+                                    if vertices is not None:
+                                        vertices_array = np.array(vertices)
+                                        roi_info = {
+                                            'id': i,
+                                            'layer_name': layer.name,
+                                            'type': 'roi',
+                                            'vertices': vertices_array.tolist(),
+                                            'shape_type': getattr(roi, 'shape_type', 'rectangle')
+                                        }
+                                        roi_data.append(roi_info)
+                                elif hasattr(roi, '__dict__'):
+                                    # Try to extract data from roi object attributes
+                                    roi_dict = roi.__dict__
+                                    
+                                    # Look for common ROI data attributes
+                                    vertices = None
+                                    for attr in ['vertices', 'data', 'points', 'coords', 'geometry']:
+                                        if attr in roi_dict:
+                                            vertices = roi_dict[attr]
+                                            break
+                                    
+                                    if vertices is not None:
+                                        vertices_array = np.array(vertices)
+                                        roi_info = {
+                                            'id': i,
+                                            'layer_name': layer.name,
+                                            'type': 'roi',
+                                            'vertices': vertices_array.tolist(),
+                                            'shape_type': roi_dict.get('shape_type', 'rectangle')
+                                        }
+                                        roi_data.append(roi_info)
+                                        
+                            except Exception as e:
+                                pass
+                        
+                        if roi_data:
+                            # Create image layers for these ROIs
+                            self.create_roi_image_layers(roi_data, layer)
+                            return roi_data
+            
+            # Method 2: Look for any shapes layers in the viewer (standard napari shapes)
+            for layer in self.viewer.layers:
+                if hasattr(layer, 'data') and type(layer).__name__ == 'Shapes':
+                    if len(layer.data) > 0:
+                        for i, shape in enumerate(layer.data):
+                            try:
+                                shape_array = np.array(shape)
+                                roi_info = {
+                                    'id': i,
+                                    'layer_name': layer.name,
+                                    'type': 'rectangle',
+                                    'vertices': shape_array.tolist() if hasattr(shape_array, 'tolist') else str(shape),
+                                    'shape_type': getattr(layer, 'shape_type', ['rectangle'])[i] if hasattr(layer, 'shape_type') else 'rectangle'
+                                }
+                                roi_data.append(roi_info)
+                            except Exception as e:
+                                pass
+                        
+                        if roi_data:
+                            # Also create image layers for these ROIs
+                            self.create_roi_image_layers(roi_data, layer)
+                            return roi_data
+            
+            # Method 3: Try to get ROIs from ROI manager if other methods failed
+            if hasattr(self.roi_manager, 'get_rois'):
+                rois = self.roi_manager.get_rois()
+                if rois:
+                    for i, roi in enumerate(rois):
+                        try:
+                            if hasattr(roi, 'to_dict'):
+                                roi_data.append(roi.to_dict())
+                            elif hasattr(roi, 'data'):
+                                roi_data.append({
+                                    'id': i,
+                                    'type': 'rectangle',
+                                    'data': roi.data.tolist() if hasattr(roi.data, 'tolist') else str(roi.data)
+                                })
+                            else:
+                                roi_data.append({'id': i, 'type': 'unknown', 'data': str(roi)})
+                        except Exception as e:
+                            pass
+                    
+                    if roi_data:
+                        return roi_data
+            
+            # Method 4: Try to access the ROI layer directly from ROI manager
+            if hasattr(self.roi_manager, '_roi_layer') and self.roi_manager._roi_layer:
+                roi_layer = self.roi_manager._roi_layer
+                if hasattr(roi_layer, 'data') and len(roi_layer.data) > 0:
+                    for i, shape in enumerate(roi_layer.data):
+                        try:
+                            roi_data.append({
+                                'id': i,
+                                'type': 'rectangle',
+                                'vertices': shape.tolist() if hasattr(shape, 'tolist') else str(shape)
+                            })
+                        except Exception as e:
+                            pass
+                    
+                    if roi_data:
+                        return roi_data
+            
+            return []
+            
+        except Exception:
+            return []  # Return empty list on any error
 
-            # Update the list
-            self.update_roi_list()
-            QMessageBox.information(self, "Success", f"Loaded {len(rois)} ROIs")
-
+    def create_roi_image_layers(self, roi_data, shapes_layer):
+        """Create individual image layers for each ROI for post-processing"""
+        if not self.current_image_path:
+            return
+        
+        try:
+            # Get the current image data
+            image_layer = None
+            for layer in self.viewer.layers:
+                if hasattr(layer, 'data') and layer.__class__.__name__ == 'Image':
+                    image_layer = layer
+                    break
+            
+            if image_layer is None:
+                return
+            
+            image_data = image_layer.data
+            
+            # Remove any existing ROI image layers to avoid duplicates
+            layers_to_remove = []
+            for layer in self.viewer.layers:
+                if hasattr(layer, 'name') and layer.name.startswith('ROI_'):
+                    layers_to_remove.append(layer)
+            
+            for layer in layers_to_remove:
+                try:
+                    self.viewer.layers.remove(layer)
+                except Exception:
+                    pass  # Silently handle layer removal errors
+            
+            # Create new ROI image layers
+            for roi_info in roi_data:
+                try:
+                    roi_id = roi_info['id']
+                    vertices = np.array(roi_info['vertices'])
+                    
+                    if len(vertices.shape) == 2 and vertices.shape[0] >= 4:
+                        # Get bounding box (napari uses y, x coordinates)
+                        y_coords = vertices[:, 0]
+                        x_coords = vertices[:, 1]
+                        
+                        y_min, y_max = int(np.floor(y_coords.min())), int(np.ceil(y_coords.max()))
+                        x_min, x_max = int(np.floor(x_coords.min())), int(np.ceil(x_coords.max()))
+                        
+                        # Handle multi-dimensional image data
+                        if image_data.ndim == 4:  # (T, Z, Y, X) or (T, C, Y, X)
+                            roi_image = image_data[:, :, y_min:y_max, x_min:x_max]
+                        elif image_data.ndim == 3:  # (T, Y, X) or (Z, Y, X) or (C, Y, X)
+                            roi_image = image_data[:, y_min:y_max, x_min:x_max]
+                        else:  # 2D image (Y, X)
+                            roi_image = image_data[y_min:y_max, x_min:x_max]
+                        
+                        # Ensure within image bounds
+                        if roi_image.size > 0:
+                            roi_layer_name = f"ROI_{roi_id + 1}_{os.path.splitext(os.path.basename(self.current_image_path))[0]}"
+                            
+                            # Add as new image layer
+                            self.viewer.add_image(
+                                roi_image, 
+                                name=roi_layer_name,
+                                visible=False  # Start hidden to not clutter the view
+                            )
+                        
+                except Exception as e:
+                    pass  # Silently handle individual ROI processing errors
+            
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load ROIs: {str(e)}")
+            pass  # Silently handle image layer creation errors
 
-    def set_current_image(self, image_path):
-        """Set the current image path"""
-        self.current_image_path = image_path
+    def create_roi_image_layers_from_saved_data(self, rois_data):
+        """Create individual image layers for each ROI from saved data"""
+        if not self.current_image_path or not rois_data:
+            return
         
-        if not image_path:
+        try:
+            # Get the current image data
+            image_layer = None
+            for layer in self.viewer.layers:
+                if hasattr(layer, 'data') and layer.__class__.__name__ == 'Image':
+                    image_layer = layer
+                    break
+            
+            if image_layer is None:
+                return
+
+            image_data = image_layer.data
+            
+            # Remove any existing ROI image layers to avoid duplicates
+            layers_to_remove = []
+            for layer in self.viewer.layers:
+                if hasattr(layer, 'name') and layer.name.startswith('ROI_'):
+                    layers_to_remove.append(layer)
+            
+            for layer in layers_to_remove:
+                try:
+                    self.viewer.layers.remove(layer)
+                except Exception:
+                    pass  # Silently handle layer removal errors
+            
+            # Create new ROI image layers from saved data
+            for i, roi_info in enumerate(rois_data):
+                try:
+                    roi_id = roi_info.get('id', i)
+                    vertices = np.array(roi_info['vertices'])
+                    
+                    if len(vertices.shape) == 2 and vertices.shape[0] >= 4:
+                        # Get bounding box (napari uses y, x coordinates)
+                        y_coords = vertices[:, 0]
+                        x_coords = vertices[:, 1]
+                        
+                        y_min, y_max = int(np.floor(y_coords.min())), int(np.ceil(y_coords.max()))
+                        x_min, x_max = int(np.floor(x_coords.min())), int(np.ceil(x_coords.max()))
+                        
+                        # Handle multi-dimensional image data
+                        if image_data.ndim == 4:  # (T, Z, Y, X) or (T, C, Y, X)
+                            roi_image = image_data[:, :, y_min:y_max, x_min:x_max]
+                        elif image_data.ndim == 3:  # (T, Y, X) or (Z, Y, X) or (C, Y, X)
+                            roi_image = image_data[:, y_min:y_max, x_min:x_max]
+                        else:  # 2D image (Y, X)
+                            roi_image = image_data[y_min:y_max, x_min:x_max]
+                        
+                        # Ensure within image bounds
+                        if roi_image.size > 0:
+                            roi_layer_name = f"ROI_{roi_id + 1}_{os.path.splitext(os.path.basename(self.current_image_path))[0]}"
+                            
+                            # Add as new image layer
+                            self.viewer.add_image(
+                                roi_image, 
+                                name=roi_layer_name,
+                                visible=False  # Start hidden to not clutter the view
+                            )
+                        
+                except Exception as e:
+                    pass  # Silently handle individual ROI processing errors
+            
+        except Exception as e:
+            pass  # Silently handle image layer creation errors
+
+    def load_rois_data(self, rois_data):
+        """Load ROI data into the ROI manager in a safe way"""
+        if not self.roi_manager_initialized:
             return
             
-        if self.roi_layer is not None:
-            try:
-                self.viewer.layers.remove(self.roi_layer)
-            except ValueError:
-                pass
-            self.roi_layer = None
+        try:
+            # Clear existing ROI shapes first
+            self.cleanup_existing_roi_layers()
+            
+            # Create a new shapes layer to hold the loaded ROIs
+            shapes_data = []
+            for roi_data in rois_data:
+                try:
+                    if 'vertices' in roi_data:
+                        vertices = np.array(roi_data['vertices'])
+                        shapes_data.append(vertices)
+                    elif 'data' in roi_data and isinstance(roi_data['data'], list):
+                        vertices = np.array(roi_data['data'])
+                        shapes_data.append(vertices)
+                except Exception as e:
+                    pass  # Silently handle individual ROI loading errors
+            
+            if shapes_data:
+                # Add shapes layer with loaded ROIs
+                roi_layer = self.viewer.add_shapes(
+                    shapes_data,
+                    name="ROIs",
+                    shape_type='rectangle',
+                    edge_color='red',
+                    face_color='red',
+                    opacity=0.3
+                )
+                
+                # Connect to data change events
+                roi_layer.events.data.connect(self.on_shapes_layer_changed)
+                
+                # Update the roi_layer reference for fallback mode
+                if not self.roi_manager:
+                    self.roi_layer = roi_layer
+                
+                # Make sure the ROI layer is visible and selected
+                roi_layer.visible = True
+                self.viewer.layers.selection.active = roi_layer
+            
+            # Also try to add ROIs to the ROI manager if it exists
+            if self.roi_manager:
+                try:
+                    # Clear existing ROIs from manager
+                    if hasattr(self.roi_manager, 'clear_rois'):
+                        self.roi_manager.clear_rois()
+                    
+                    # Try different methods to add ROIs to manager
+                    for roi_data in rois_data:
+                        try:
+                            if hasattr(self.roi_manager, 'add_roi'):
+                                self.roi_manager.add_roi(roi_data)
+                            elif hasattr(self.roi_manager, '_roi_layer') and self.roi_manager._roi_layer:
+                                # Add to the underlying layer directly
+                                roi_layer = self.roi_manager._roi_layer
+                                if 'vertices' in roi_data:
+                                    vertices = np.array(roi_data['vertices'])
+                                    roi_layer.add([vertices], shape_type='rectangle')
+                        except Exception as e:
+                            pass  # Silently handle ROI manager loading errors
+                except Exception as e:
+                    pass  # Silently handle ROI manager operations
+                    
+        except Exception as e:
+            pass  # Silently handle general ROI data loading errors
 
-    def on_roi_data_changed(self, event=None):
-        """Handle changes to ROI data"""
-        self.update_roi_list()
-        if self.auto_save_check.isChecked() and self.current_image_path:
-            self.auto_save_rois()
+    def on_roi_changed(self, *args, **kwargs):
+        """Handle ROI changes"""
+        try:
+            # Get the current image layer
+            image_layer = None
+            for layer in self.viewer.layers:
+                # Check if it's an image layer (not a shapes layer or ROI layer)
+                if hasattr(layer, 'data') and layer.__class__.__name__ == 'Image' and not layer.name.startswith('ROI_'):
+                    image_layer = layer
+                    break
 
-    def update_roi_list(self):
-        """Update the ROI list widget"""
-        self.roi_list.clear()
-        rois = self.get_rois()
-        if rois:
-            for i, roi in enumerate(rois):
-                self.roi_list.addItem(f"ROI_{i+1}")
+            if image_layer is not None:
+                # Get ROIs and process each one individually
+                rois_data = self.get_rois_data()
+                if rois_data:
+                    # Find the ROI image layers that were created
+                    roi_image_layers = []
+                    for layer in self.viewer.layers:
+                        if hasattr(layer, 'name') and layer.name.startswith('ROI_'):
+                            roi_image_layers.append(layer)
+                    
+                    # Emit signal for each ROI image layer
+                    for roi_layer in roi_image_layers:
+                        try:
+                            # Extract the ROI data from the image layer
+                            roi_image_data = roi_layer.data
+                            
+                            # Handle multi-dimensional data - get 2D slice if needed
+                            if roi_image_data.ndim > 2:
+                                # For time series or multi-channel, take first frame/channel
+                                while roi_image_data.ndim > 2:
+                                    roi_image_data = roi_image_data[0]
+                            
+                            self.roi_updated.emit(roi_image_data, image_layer)
+                            
+                        except Exception as e:
+                            pass  # Silently handle individual ROI update errors
 
-    def on_roi_selection_changed(self):
-        """Handle ROI selection changes"""
-        selected_items = self.roi_list.selectedItems()
-        self.delete_roi_btn.setEnabled(len(selected_items) > 0)
-        
-        # Highlight selected ROI in viewer if possible
-        if hasattr(self.roi_manager, 'layer'):
-            layer = self.roi_manager.layer
-        elif hasattr(self.roi_manager, 'shapes_layer'):
-            layer = self.roi_manager.shapes_layer
-        elif hasattr(self.roi_manager, 'roi_layer'):
-            layer = self.roi_manager.roi_layer
-        else:
+            # Auto-save if enabled
+            if hasattr(self, 'auto_save_check') and self.auto_save_check.isChecked():
+                self.save_rois(auto=True)
+                
+        except Exception as e:
+            pass  # Silently handle ROI change processing errors
+
+    def calculate_measurements(self):
+        """Calculate measurements for all ROIs"""
+        if not self.roi_manager_initialized or not self.roi_manager:
+            QMessageBox.warning(self, "ROI Manager Not Ready", "Please initialize ROI Manager first.")
             return
             
-        if selected_items:
-            roi_idx = int(selected_items[0].text().split('_')[1]) - 1
-            layer.selected_data = {roi_idx}
-        else:
-            layer.selected_data = set()
-
-    def delete_selected_roi(self):
-        """Delete the selected ROI"""
-        selected_items = self.roi_list.selectedItems()
-        if not selected_items:
-            return
-            
-        roi_idx = int(selected_items[0].text().split('_')[1]) - 1
-        rois = self.get_rois()
-        if roi_idx < len(rois):
-            rois.pop(roi_idx)
-            if hasattr(self.roi_manager, 'layer'):
-                self.roi_manager.layer.data = rois
-            elif hasattr(self.roi_manager, 'shapes_layer'):
-                self.roi_manager.shapes_layer.data = rois
-            elif hasattr(self.roi_manager, 'roi_layer'):
-                self.roi_manager.roi_layer.data = rois
-
-    def _on_roi_save(self):
-        """Handler for when the Save button in ROI manager is clicked"""
-        rois = self.get_rois()
-        if rois:
-            # Save ROIs
-            self.save_rois()
-            # Emit our signal with the list of ROIs
-            self.roi_saved.emit(rois)
-
-    def get_rois(self):
-        """Retrieve the list of ROIs from the shapes layer"""
-        if self.roi_layer is not None:
-            return list(self.roi_layer.data)
-        return []
-        
-    def create_roi_layer(self):
-        """Create a new ROI layer for the current image"""
         if not self.current_image_path:
             QMessageBox.warning(self, "No Image", "Please load an image first.")
             return
 
-        # Look for the matching image layer
-        image_layer = None
-        for layer in self.viewer.layers:
-            if (layer.__class__.__name__ == 'Image' and 
-                layer.name == os.path.basename(self.current_image_path)):
-                image_layer = layer
-                break
+        try:
+            rois_data = self.get_rois_data()
+            if not rois_data:
+                QMessageBox.warning(self, "No ROIs", "Please create some ROIs first.")
+                return
 
-        # If not found, try getting any image layer
-        if image_layer is None:
+            # Get the image data
+            image_layer = None
             for layer in self.viewer.layers:
-                if layer.__class__.__name__ == 'Image':
+                if hasattr(layer, 'data') and layer.__class__.__name__ == 'Image':
                     image_layer = layer
                     break
 
-        if image_layer is None:
-            QMessageBox.warning(self, "No Image", "Please load an image first.")
-            return
-            
-        if self.roi_layer is not None:
-            self.viewer.layers.remove(self.roi_layer)
-            
-        self.roi_layer = self.viewer.add_shapes(
-            name='ROIs',
-            shape_type='rectangle',
-            edge_width=2,
-            edge_color='red',
-            face_color='transparent'
-        )
-        
-        self.roi_layer.events.data.connect(self.on_roi_data_changed)
+            if image_layer is None:
+                QMessageBox.warning(self, "No Image", "No image found to measure.")
+                return
 
-        # After creating the layer, try to load existing ROIs
+            # Calculate measurements for each ROI
+            results = []
+            
+            # Try to use ROI manager's measurement capabilities first
+            try:
+                if hasattr(self.roi_manager, 'get_rois'):
+                    rois = self.roi_manager.get_rois()
+                    for i, roi in enumerate(rois):
+                        if hasattr(roi, 'get_measurements'):
+                            measurements = roi.get_measurements(image_layer.data)
+                            result = {
+                                'ROI_ID': i + 1,
+                                'Frame': 0,
+                                **measurements
+                            }
+                            results.append(result)
+                        elif hasattr(roi, 'data'):
+                            # Manual calculation fallback
+                            result = self.calculate_roi_measurements(roi.data, image_layer.data, i + 1)
+                            if result:
+                                results.append(result)
+            except Exception:
+                pass  # Silently handle ROI manager measurement errors
+            
+            # Fallback: manual calculation using ROI layer
+            if not results:
+                if hasattr(self.roi_manager, '_roi_layer') and self.roi_manager._roi_layer:
+                    roi_layer = self.roi_manager._roi_layer
+                    if hasattr(roi_layer, 'data'):
+                        for i, shape in enumerate(roi_layer.data):
+                            result = self.calculate_roi_measurements(shape, image_layer.data, i + 1)
+                            if result:
+                                results.append(result)
+
+            # Convert to DataFrame and emit
+            if results:
+                df = pd.DataFrame(results)
+                self.measurements_ready.emit(df)
+                QMessageBox.information(self, "Success", f"Calculated measurements for {len(results)} ROIs")
+            else:
+                QMessageBox.warning(self, "No Measurements", "No valid ROI measurements could be calculated.")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to calculate measurements: {str(e)}")
+
+    def calculate_roi_measurements(self, roi_shape, image_data, roi_id):
+        """Calculate measurements for a single ROI shape"""
         try:
-            # Look for ROI file
-            roi_dir = os.path.join(os.path.dirname(self.current_image_path), 'ROI_management')
-            image_name = os.path.splitext(os.path.basename(self.current_image_path))[0]
-            roi_file = os.path.join(roi_dir, f"{image_name}_ROIs.json")
-
-            if os.path.exists(roi_file):
-                # Ask user if they want to load existing ROIs
-                response = QMessageBox.question(
-                    self, 
-                    "Existing ROIs Found", 
-                    "ROIs were found for this image. Would you like to load them?",
-                    QMessageBox.Yes | QMessageBox.No
-                )
-                if response == QMessageBox.Yes:
-                    self.load_rois()
-                    QMessageBox.information(self, "ROI Layer Created", 
-                                      "ROI layer created and existing ROIs loaded.")
-                    return
-        except Exception:
-            pass  # If anything goes wrong, just create empty layer
-
-        self.update_roi_list()
-        QMessageBox.information(self, "ROI Layer Created", 
-                              "ROI layer created. Use rectangle tool to draw ROIs.")
-                              
-    def delete_selected_roi(self):
-        """Delete the selected ROI"""
-        if self.roi_layer is None:
-            return
+            # Convert to numpy array if needed
+            if not isinstance(roi_shape, np.ndarray):
+                roi_shape = np.array(roi_shape)
             
-        selected_items = self.roi_list.selectedItems()
-        if not selected_items:
-            return
-            
-        roi_idx = int(selected_items[0].text().split('_')[1]) - 1
-        if roi_idx < len(self.roi_layer.data):
-            data = list(self.roi_layer.data)
-            data.pop(roi_idx)
-            self.roi_layer.data = data
-            self.update_roi_list()
-            
-    def update_roi_list(self):
-        """Update the ROI list widget"""
-        self.roi_list.clear()
-        if self.roi_layer is not None:
-            for i, _ in enumerate(self.roi_layer.data):
-                self.roi_list.addItem(f"ROI_{i+1}")
+            # Handle different shape formats
+            if len(roi_shape.shape) == 2 and roi_shape.shape[0] == 4:  # Rectangle with 4 corners
+                # Get bounding box coordinates (napari uses y, x)
+                y_coords = roi_shape[:, 0]
+                x_coords = roi_shape[:, 1]
                 
-    def on_roi_selection_changed(self):
-        """Handle ROI selection changes"""
-        selected_items = self.roi_list.selectedItems()
-        self.delete_roi_btn.setEnabled(len(selected_items) > 0)
-        
-        if self.roi_layer is not None and selected_items:
-            roi_idx = int(selected_items[0].text().split('_')[1]) - 1
-            self.roi_layer.selected_data = {roi_idx}
-        
-    def on_measurements_finished(self, results):
-        """Handle completed measurements"""
-        try:
-            df = pd.DataFrame(results)
-            df = df.sort_values(['Frame', 'ROI_ID'])
+                y_min, y_max = int(np.floor(y_coords.min())), int(np.ceil(y_coords.max()))
+                x_min, x_max = int(np.floor(x_coords.min())), int(np.ceil(x_coords.max()))
+                
+                # Get image data (handle 2D or higher dimensions)
+                if image_data.ndim > 2:
+                    # For multi-dimensional data, take the first frame/channel
+                    current_data = image_data
+                    while current_data.ndim > 2:
+                        current_data = current_data[0]
+                else:
+                    current_data = image_data
+                
+                # Ensure within image bounds
+                y_min = max(0, y_min)
+                x_min = max(0, x_min)
+                y_max = min(current_data.shape[0], y_max)
+                x_max = min(current_data.shape[1], x_max)
+                
+                if y_min < y_max and x_min < x_max:
+                    # Extract ROI region
+                    roi_region = current_data[y_min:y_max, x_min:x_max]
+                    
+                    # Calculate metrics
+                    return {
+                        'ROI_ID': roi_id,
+                        'Frame': 0,
+                        'Max_Density': float(np.max(roi_region)),
+                        'Mean_Density': float(np.mean(roi_region)),
+                        'Min_Density': float(np.min(roi_region)),
+                        'Std_Density': float(np.std(roi_region)),
+                        'Area': int((y_max - y_min) * (x_max - x_min))
+                    }
             
-            self.measure_btn.setEnabled(True)
-            self.progress_bar.setVisible(False)
-            self.progress_bar.setValue(0)
-            
-            self.measurements_ready.emit(df)
+            return None
             
         except Exception as e:
-            self.on_measurements_error(str(e))
-            
-    def on_measurements_error(self, error_msg):
-        """Handle measurement errors"""
-        self.measure_btn.setEnabled(True)
-        self.progress_bar.setVisible(False)
-        QMessageBox.critical(self, "Error", f"Error during measurements: {error_msg}")
-
-    def on_roi_data_changed(self, event=None):
-        """Handle changes to ROI data"""
-        self.update_roi_list()
-        if hasattr(self, 'save_rois'):
-            self.save_rois(auto=True)
+            return None
