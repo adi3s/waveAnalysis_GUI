@@ -84,8 +84,10 @@ def combined_workflow(
     else:
         file_names = [fname for fname in os.listdir(folder_path) if fname.endswith('.tif') and not fname.startswith('.')]
 
-    # check for group name errors          
-    hf.group_name_error_check(file_names=file_names, group_names=group_names, log_params=log_params)
+    # check for group name errors - skip if processing single image with custom group names
+    # (custom group names are used for ROI identification, not group matching)
+    if not image_path or group_names == ['']:
+        hf.group_name_error_check(file_names=file_names, group_names=group_names, log_params=log_params)
 
     # performance tracker
     start = timeit.default_timer()
