@@ -25,9 +25,15 @@ def tiff_to_np_array_single_frame(file_path: str, roi=None) -> np.ndarray:
     
     if roi is not None:
         # Create a mask from ROI vertices
+        # Note: napari uses (y, x) coordinates, but matplotlib.path.Path expects (x, y)
+        # So we need to swap the coordinates
         from matplotlib.path import Path
         mask = np.zeros(image.shape[-2:], dtype=bool)
-        roi_path = Path(roi)
+        
+        # Swap from (y, x) to (x, y) for matplotlib Path
+        roi_xy = roi[:, [1, 0]] if roi.shape[1] == 2 else roi
+        roi_path = Path(roi_xy)
+        
         y, x = np.mgrid[:image.shape[-2], :image.shape[-1]]
         points = np.vstack((x.ravel(), y.ravel())).T
         mask = roi_path.contains_points(points).reshape(image.shape[-2:])
@@ -74,9 +80,15 @@ def tiff_to_np_array_multi_frame(file_path: str, roi=None) -> np.ndarray:
     
     if roi is not None:
         # Create a mask from ROI vertices
+        # Note: napari uses (y, x) coordinates, but matplotlib.path.Path expects (x, y)
+        # So we need to swap the coordinates
         from matplotlib.path import Path
         mask = np.zeros(image.shape[-2:], dtype=bool)
-        roi_path = Path(roi)
+        
+        # Swap from (y, x) to (x, y) for matplotlib Path
+        roi_xy = roi[:, [1, 0]] if roi.shape[1] == 2 else roi
+        roi_path = Path(roi_xy)
+        
         y, x = np.mgrid[:image.shape[-2], :image.shape[-1]]
         points = np.vstack((x.ravel(), y.ravel())).T
         mask = roi_path.contains_points(points).reshape(image.shape[-2:])
