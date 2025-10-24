@@ -58,34 +58,6 @@ class PostProcessingTab(QWidget):
         display_label.setStyleSheet("font-weight: bold;")
         display_box.addWidget(display_label)
 
-        # Data source selection with help text (hidden for Summary view)
-        self.data_source_widget = QWidget()
-        data_source_widget_layout = QVBoxLayout()
-        data_source_widget_layout.setContentsMargins(0, 0, 0, 0)
-        
-        data_source_help = QLabel("Select data to display:")
-        data_source_help.setStyleSheet("font-size: 10px; color: gray;")
-        data_source_widget_layout.addWidget(data_source_help)
-        
-        data_source_layout = QHBoxLayout()
-        self.whole_image_checkbox = QCheckBox("Whole Image")
-        self.whole_image_checkbox.setChecked(True)
-        self.whole_image_checkbox.setToolTip("Show analysis results for the entire image")
-        self.whole_image_checkbox.stateChanged.connect(self.on_data_source_changed)
-        
-        self.roi_data_checkbox = QCheckBox("ROI Data")
-        self.roi_data_checkbox.setChecked(False)
-        self.roi_data_checkbox.setToolTip("Show analysis results for individual ROIs")
-        self.roi_data_checkbox.stateChanged.connect(self.on_data_source_changed)
-        
-        data_source_layout.addWidget(self.whole_image_checkbox)
-        data_source_layout.addWidget(self.roi_data_checkbox)
-        data_source_widget_layout.addLayout(data_source_layout)
-        
-        self.data_source_widget.setLayout(data_source_widget_layout)
-        self.data_source_widget.setVisible(False)  # Hidden by default for Summary
-        display_box.addWidget(self.data_source_widget)
-
         # Export controls
         export_box = QVBoxLayout()
         export_label = QLabel("Export Options:")
@@ -181,26 +153,13 @@ class PostProcessingTab(QWidget):
         file_paths = self.locate_processed_files(display_type)
         
         if not file_paths:
-            # Check if user selected ROI data but no ROI files exist
-            if self.roi_data_checkbox.isChecked() and not self.whole_image_checkbox.isChecked():
-                self.status_label.setText(f"No ROI processed files found for {display_type}. Try running analysis with ROIs first.")
-            else:
-                self.status_label.setText(f"No processed files found for {display_type}.")
+            self.status_label.setText(f"No processed files found for {display_type}.")
             
             # Display a helpful message
             container = QWidget()
             container_layout = QVBoxLayout()
             
-            if self.roi_data_checkbox.isChecked() and not self.whole_image_checkbox.isChecked():
-                message = QLabel(
-                    "No ROI analysis results found.\n\n"
-                    "To see ROI-specific results:\n"
-                    "1. Go to the ROI tab and create ROIs\n"
-                    "2. Run analysis from the Pre-Processing tab\n"
-                    "3. ROI-specific results will appear here"
-                )
-            else:
-                message = QLabel(f"No processed files found for {display_type}.")
+            message = QLabel(f"No processed files found for {display_type}.")
             
             message.setAlignment(Qt.AlignCenter)
             message.setStyleSheet("color: gray; font-size: 12px; padding: 20px;")
@@ -293,20 +252,8 @@ class PostProcessingTab(QWidget):
                     col += 1
             row += 1
         
-        # Update status message based on data source selection
-        if display_type == "Summary":
-            # For Summary, always show all data
-            data_source_text = "All Data"
-        else:
-            data_source = []
-            if self.whole_image_checkbox.isChecked():
-                data_source.append("Whole Image")
-            if self.roi_data_checkbox.isChecked():
-                data_source.append("ROI Data")
-            
-            data_source_text = " & ".join(data_source) if data_source else "No Data"
-        
-        self.status_label.setText(f"Displaying {len(grouped_files)} result groups for {display_type} ({data_source_text}).")
+        # Update status message
+        self.status_label.setText(f"Displaying {len(grouped_files)} result groups for {display_type}.")
         
         # Add a stretch at the end to keep plots left-aligned
         self.results_layout.addStretch()
@@ -316,7 +263,7 @@ class PostProcessingTab(QWidget):
         self.results_widget.setMinimumWidth(total_width)
 
     def locate_processed_files(self, display_type):
-        """Locate processed files based on the display type and data source selection."""
+        """Locate processed files based on the display type."""
         if not self.results_dir:
             return []
 
@@ -329,15 +276,6 @@ class PostProcessingTab(QWidget):
 
         file_paths = []
         
-        # Determine data source filter
-        # For Summary, always show both whole image and ROI data
-        if display_type == "Summary":
-            show_whole_image = True
-            show_roi_data = True
-        else:
-            show_whole_image = self.whole_image_checkbox.isChecked()
-            show_roi_data = self.roi_data_checkbox.isChecked()
-        
         # Handle different display types - search in original structure
         if display_type == "Summary":
             # Look for summary CSV files in main directory and subdirectories
@@ -345,9 +283,7 @@ class PostProcessingTab(QWidget):
                 for f in files:
                     if f.endswith(".csv") and keywords[display_type] in f:
                         file_path = os.path.join(root, f)
-                        # Filter based on data source selection (always both for Summary)
-                        if self._should_include_file(f, file_path, show_whole_image, show_roi_data):
-                            file_paths.append(file_path)
+                        file_paths.append(file_path)
         else:
             # Handle plot types that can show either summary or individual
             selected_type = display_type  # The type the user selected to view
@@ -362,41 +298,16 @@ class PostProcessingTab(QWidget):
                             for f in files:
                                 if f.endswith(".png") and indv_keyword in f:
                                     file_path = os.path.join(root, f)
-                                    if self._should_include_file(f, file_path, show_whole_image, show_roi_data):
-                                        file_paths.append(file_path)
+                                    file_paths.append(file_path)
                 else:
                     # Show only summary plots
                     for root, dirs, files in os.walk(self.results_dir):
                         for f in files:
                             if f.endswith(".png") and keyword_info["mean"] in f:
                                 file_path = os.path.join(root, f)
-                                if self._should_include_file(f, file_path, show_whole_image, show_roi_data):
-                                    file_paths.append(file_path)
+                                file_paths.append(file_path)
                                     
         return sorted(file_paths)
-
-    def _should_include_file(self, filename, file_path, show_whole_image, show_roi_data):
-        """Determine if a file should be included based on data source selection."""
-        # Normalize path separators for consistent checking
-        normalized_path = file_path.replace("\\", "/")
-        path_parts = normalized_path.split("/")
-        
-        # Check if file is in an ROI subdirectory or has ROI in filename
-        is_roi_file = False
-        for part in path_parts:
-            if part.startswith("ROI_"):
-                is_roi_file = True
-                break
-        
-        # Also check filename directly
-        if "ROI_" in filename or "roi_" in filename.lower():
-            is_roi_file = True
-        
-        # Include file based on selection
-        if is_roi_file:
-            return show_roi_data
-        else:
-            return show_whole_image
 
     def display_image(self, canvas, image_path):
         """Load and display an image on the given canvas."""
@@ -500,13 +411,6 @@ class PostProcessingTab(QWidget):
         # Show/hide individual plot checkbox based on display type
         self.show_individual.setVisible(display_type in ["ACF Plots", "CCF Plots", "Peak Properties"])
         
-        # Show/hide data source selection based on display type
-        # For Summary, show everything; for plots, allow filtering
-        if display_type == "Summary":
-            self.data_source_widget.setVisible(False)
-        else:
-            self.data_source_widget.setVisible(True)
-        
         if self.results_dir and os.path.exists(self.results_dir):
             self.show_results()
                 
@@ -515,19 +419,6 @@ class PostProcessingTab(QWidget):
         if self.results_dir and os.path.exists(self.results_dir):
             self.show_results()  # This will update the display based on current selection
     
-    def on_data_source_changed(self, state):
-        """Handle changes in data source selection (whole image vs ROI)."""
-        # Ensure at least one option is selected
-        if not self.whole_image_checkbox.isChecked() and not self.roi_data_checkbox.isChecked():
-            # If user unchecked the last option, recheck it
-            sender = self.sender()
-            sender.setChecked(True)
-            return
-        
-        # Update display if results are available
-        if self.results_dir and os.path.exists(self.results_dir):
-            self.show_results()
-
     def export_plots(self):
         """Export plots based on selected options."""
         if not self.results_dir or not os.path.exists(self.results_dir):

@@ -26,6 +26,30 @@ class PreProcessingTab(QWidget):
         """Initialize the user interface for the PreProcessingTab"""
         layout = QVBoxLayout()
         
+        # Add Analysis Type Selection group
+        analysis_type_group = QGroupBox("Analysis Type")
+        analysis_type_layout = QVBoxLayout()
+        
+        analysis_help = QLabel("Select which data to analyze:")
+        analysis_help.setStyleSheet("font-size: 10px; color: gray;")
+        analysis_type_layout.addWidget(analysis_help)
+        
+        checkbox_layout = QHBoxLayout()
+        self.whole_image_checkbox = QCheckBox("Whole Image")
+        self.whole_image_checkbox.setChecked(True)
+        self.whole_image_checkbox.setToolTip("Analyze the entire image")
+        
+        self.roi_data_checkbox = QCheckBox("ROI Data")
+        self.roi_data_checkbox.setChecked(False)
+        self.roi_data_checkbox.setToolTip("Analyze individual ROIs (ROIs must be created in the ROI tab)")
+        
+        checkbox_layout.addWidget(self.whole_image_checkbox)
+        checkbox_layout.addWidget(self.roi_data_checkbox)
+        analysis_type_layout.addLayout(checkbox_layout)
+        
+        analysis_type_group.setLayout(analysis_type_layout)
+        layout.addWidget(analysis_type_group)
+        
         # Add ROI Processing group
         roi_group = QGroupBox("ROI Processing")
         roi_layout = QVBoxLayout()
@@ -175,5 +199,8 @@ class PreProcessingTab(QWidget):
             # ROI processing parameters
             "roi_channel": self.roi_channel_combo.currentText(),
             "process_all_frames": self.process_all_frames.isChecked(),
-            "frame_interval": self.frame_interval.value()
+            "frame_interval": self.frame_interval.value(),
+            # Analysis type selection
+            "analyze_whole_image": self.whole_image_checkbox.isChecked(),
+            "analyze_roi_data": self.roi_data_checkbox.isChecked()
         }
