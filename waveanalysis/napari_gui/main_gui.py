@@ -241,40 +241,39 @@ class WaveAnalysisWidget(QWidget):
         # Get active ROIs
         active_rois = self.get_active_rois()
         
+        # Get analysis type selections from pre-process tab
+        analyze_whole_image = pre_params.get("analyze_whole_image", True)
+        analyze_roi_data = pre_params.get("analyze_roi_data", False)
+        
         # Get image name for file naming
         image_name = os.path.splitext(os.path.basename(image_path))[0]
 
         # Create a list to store results from each ROI
         all_results = []
         
-        # If ROIs exist, process each ROI AND the whole image
-        # If no ROIs, just process the whole image
-        rois_to_process = active_rois if active_rois else [None]
-        
-        for i, roi in enumerate(rois_to_process):
-            # Update log params to include image name in file naming
-            roi_log_params = log_params.copy()
-            if roi is not None:
+        # Process ROIs if user selected ROI analysis and ROIs exist
+        if active_rois and analyze_roi_data:
+            for i, roi in enumerate(active_rois):
+                # Update log params to include image name in file naming
+                roi_log_params = log_params.copy()
                 roi_log_params["Files Processed"] = [f"{image_name}_ROI_{i+1}"]
-            else:
-                roi_log_params["Files Processed"] = [image_name]
-                
-            roi_results = rolling_workflow(
-                folder_path=results_dir,  # Use main results directory
-                log_params=roi_log_params,
-                box_size=params.get("box_size"),
-                box_shift=params.get("bin_shift"),
-                roll_size=params.get("subframe_size"),
-                roll_by=params.get("subframe_shift"),
-                acf_peak_thresh=pre_params.get("threshold"),
-                test=False,
-                roi=roi,  # Pass the ROI to the workflow
-                image_path=image_path  # Pass current image path
-            )
-            all_results.append(roi_results)
+                    
+                roi_results = rolling_workflow(
+                    folder_path=results_dir,  # Use main results directory
+                    log_params=roi_log_params,
+                    box_size=params.get("box_size"),
+                    box_shift=params.get("bin_shift"),
+                    roll_size=params.get("subframe_size"),
+                    roll_by=params.get("subframe_shift"),
+                    acf_peak_thresh=pre_params.get("threshold"),
+                    test=False,
+                    roi=roi,  # Pass the ROI to the workflow
+                    image_path=image_path  # Pass current image path
+                )
+                all_results.append(roi_results)
         
-        # If we had ROIs, also process the whole image without masking
-        if active_rois:
+        # Process the whole image if user selected whole image analysis
+        if analyze_whole_image:
             whole_image_log_params = log_params.copy()
             whole_image_log_params["Files Processed"] = [image_name]
             
@@ -302,13 +301,18 @@ class WaveAnalysisWidget(QWidget):
         # Get active ROIs
         active_rois = self.get_active_rois()
         
+        # Get analysis type selections from pre-process tab
+        analyze_whole_image = pre_params.get("analyze_whole_image", True)
+        analyze_roi_data = pre_params.get("analyze_roi_data", False)
+        
         # Get image name for file naming
         image_name = os.path.splitext(os.path.basename(image_path))[0]
 
         # Create a list to store results from each ROI
         all_results = []
         
-        if active_rois:
+        # Process ROIs if user selected ROI analysis and ROIs exist
+        if active_rois and analyze_roi_data:
             # Process each ROI separately but save to main results directory
             for i, roi in enumerate(active_rois):
                 # Ensure ROI is a numpy array with correct shape
@@ -361,8 +365,9 @@ class WaveAnalysisWidget(QWidget):
                     if os.path.exists(dest_dir):
                         shutil.rmtree(dest_dir)
                     shutil.move(image_results_subdir, dest_dir)
-            
-            # Also process the whole image (without ROI masking) when ROIs exist
+        
+        # Process the whole image if user selected whole image analysis
+        if analyze_whole_image:
             whole_image_log_params = log_params.copy()
             whole_image_log_params["Files Processed"] = [image_name]
             
@@ -390,32 +395,6 @@ class WaveAnalysisWidget(QWidget):
             if isinstance(whole_image_results, pd.DataFrame):
                 whole_image_results['ROI_ID'] = 'Whole_Image'
             all_results.append(whole_image_results)
-        else:
-            # Process whole image if no ROIs
-            whole_image_log_params = log_params.copy()
-            whole_image_log_params["Files Processed"] = [image_name]
-            
-            results = combined_workflow(
-                folder_path=results_dir,
-                group_names=[f"{image_name}"],  # Use image name directly without creating subdirs
-                log_params=whole_image_log_params,
-                analysis_type=params.get("type", "standard"),
-                acf_peak_thresh=pre_params.get("threshold"),
-                plot_summary_ACFs=True,
-                plot_summary_CCFs=True,
-                plot_summary_peaks=True,
-                plot_indv_ACFs=pre_params.get("plot_indv_acfs", False),
-                plot_indv_CCFs=pre_params.get("plot_indv_ccfs", False),
-                plot_indv_peaks=pre_params.get("plot_indv_peaks", False),
-                calc_wave_speeds=params.get("calc_wave_speeds", False),
-                plot_wave_speeds=params.get("calc_wave_speeds", False),
-                box_size=params.get("box_size"),
-                bin_shift=params.get("bin_shift"),
-                line_width=params.get("line_width"),
-                test=False,
-                image_path=image_path
-            )
-            all_results.append(results)
             
         # Combine results from all ROIs or whole image
         if all_results:
