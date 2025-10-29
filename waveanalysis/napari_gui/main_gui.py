@@ -35,6 +35,7 @@ class WaveAnalysisWidget(QWidget):
             "Files Processed": [],
             "Files Not Processed": [],
             "Errors": [],
+            "Plotting errors": [],
             "Time Elapsed": "",
             "Pixel Size": [],
             "Frame Interval": [],
@@ -199,12 +200,19 @@ class WaveAnalysisWidget(QWidget):
                 })
                 
                 # Determine which workflow to use and run it - put results in main directory
-                if params.get("type") == "rolling":
-                    image_results = self.run_rolling_workflow_for_image(
-                        image_path, current_image, main_results_dir, params, pre_params, current_log_params)
-                else:
-                    image_results = self.run_combined_workflow_for_image(
-                        image_path, current_image, main_results_dir, params, pre_params, current_log_params)
+                try:
+                    if params.get("type") == "rolling":
+                        image_results = self.run_rolling_workflow_for_image(
+                            image_path, current_image, main_results_dir, params, pre_params, current_log_params)
+                    else:
+                        image_results = self.run_combined_workflow_for_image(
+                            image_path, current_image, main_results_dir, params, pre_params, current_log_params)
+                except Exception as e:
+                    error_msg = f"Error processing {os.path.basename(image_path)}: {str(e)}"
+                    print(error_msg)
+                    self.log_params["Errors"].append(error_msg)
+                    current_log_params["Errors"].append(error_msg)
+                    continue
                 
                 # Add image identifier to results
                 if image_results is not None:
@@ -227,6 +235,9 @@ class WaveAnalysisWidget(QWidget):
 
             # Set results directory and show results
             self.post_process_tab.set_results_directory(main_results_dir)
+            # Pass the loaded image names (not paths) to post_process_tab
+            loaded_image_names = [os.path.splitext(os.path.basename(img))[0] for img in loaded_images]
+            self.post_process_tab.set_loaded_image_names(loaded_image_names)
             self.post_process_tab.show_results(self.results, params)
             self.tabs.setCurrentIndex(3)
 

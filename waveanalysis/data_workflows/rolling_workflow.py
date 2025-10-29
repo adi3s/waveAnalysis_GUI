@@ -81,7 +81,7 @@ def rolling_workflow(
                 ############################################
 
                 # Get image properties
-                image_path = f'{folder_path}/{file_name}'
+                image_path = os.path.join(folder_path, file_name)
                 img_props_dict = get_multi_frame_properties(image_path=image_path)
 
                 # check if frame interval is not 1 or None and log it
