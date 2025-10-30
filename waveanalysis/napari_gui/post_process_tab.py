@@ -23,7 +23,7 @@ class PostProcessingTab(QWidget):
         self.results = None
         self.params = None
         self.loaded_images = []  # Store list of loaded images
-        self.loaded_image_names = []  # Store list of loaded image names (without extension)
+        self.loaded_image_names = []  # Store list of loaded image names
         self.canvases = []
         
         # Main layout
@@ -111,8 +111,66 @@ class PostProcessingTab(QWidget):
         """Set the directory where the results are stored."""
         if isinstance(results_dir, str) and os.path.isdir(results_dir):
             self.results_dir = results_dir
+            self.update_display_options()
         else:
             self.results_dir = None
+    
+    def is_rolling_analysis(self):
+        """Detect if the current results are from rolling analysis by checking for summary_plots directory."""
+        if not self.results_dir or not os.path.exists(self.results_dir):
+            return False
+        
+        # Check for summary_plots subdirectory which is specific to rolling analysis
+        for root, dirs, files in os.walk(self.results_dir):
+            if "summary_plots" in dirs:
+                return True
+        return False
+    
+    def update_display_options(self):
+        """Update display combo box options based on analysis type."""
+        current_selection = self.display_combo.currentText()
+        self.display_combo.blockSignals(True)  # Prevent triggering change event
+        self.display_combo.clear()
+        
+        if self.is_rolling_analysis():
+            # Rolling analysis uses different terminology
+            self.display_combo.addItems([
+                "Summary",
+                "Period Plots",
+                "Shift Plots",
+                "Peak Properties"
+            ])
+            # Try to maintain selection with mapping
+            mapping = {
+                "ACF Plots": "Period Plots",
+                "CCF Plots": "Shift Plots",
+                "Peak Properties": "Peak Properties",
+                "Summary": "Summary"
+            }
+            new_selection = mapping.get(current_selection, "Summary")
+        else:
+            # Standard/Kymograph analysis uses traditional names
+            self.display_combo.addItems([
+                "Summary",
+                "ACF Plots",
+                "CCF Plots",
+                "Peak Properties"
+            ])
+            # Try to maintain selection with reverse mapping
+            mapping = {
+                "Period Plots": "ACF Plots",
+                "Shift Plots": "CCF Plots",
+                "Peak Properties": "Peak Properties",
+                "Summary": "Summary"
+            }
+            new_selection = mapping.get(current_selection, "Summary")
+        
+        # Restore selection if possible
+        index = self.display_combo.findText(new_selection)
+        if index >= 0:
+            self.display_combo.setCurrentIndex(index)
+        
+        self.display_combo.blockSignals(False)
 
     def set_loaded_images(self, image_list):
         """Set the list of loaded images for multi-image analysis display"""
@@ -218,7 +276,7 @@ class PostProcessingTab(QWidget):
                             # This might be the image name directory
                             if part not in ["Individual_ACF_plots", "Individual_CCF_plots", 
                                           "Individual_peak_plots", "mean_parameter_measurements",
-                                          "group_comparison_graphs"]:
+                                          "group_comparison_graphs", "summary_plots"]:
                                 image_name = part
                     
                     # Fallback: extract from filename
@@ -228,37 +286,42 @@ class PostProcessingTab(QWidget):
                         image_name = image_name.replace("_Peak Props.png", "").replace("_summary.csv", "")
                         image_name = image_name.split("_Individual_")[0]
             
-            # Create label in format: (ImageName)_ROI(number) or just (ImageName) for whole image
-            if roi_id and image_name:
-                # Extract just the number from ROI_1, ROI_2, etc.
-                roi_num = roi_id.replace("ROI_", "")
-                group_identifier = f"{image_name}_ROI{roi_num}"
-            elif image_name:
-                # Whole image - just use image name in parentheses
-                group_identifier = f"({image_name})"
-            elif roi_id:
-                # Just ROI without image name
+            # Create group identifier - prioritize ROI organization
+            # Format: ROI_1, ROI_2, etc. OR "Whole Image" for non-ROI results
+            if roi_id:
+                # ROI-based analysis - use just ROI number for grouping
                 group_identifier = roi_id
             else:
-                # Fallback to display type
-                group_identifier = display_type
+                # Whole image analysis
+                group_identifier = "Whole Image"
             
             if group_identifier not in grouped_files:
                 grouped_files[group_identifier] = []
             grouped_files[group_identifier].append(file_path)
         
-        # Display files in a grid, one row per group
-        # Sort groups to show whole image first, then ROIs in order
-        sorted_groups = sorted(grouped_files.items(), key=lambda x: (
-            0 if not "_ROI" in x[0] else 1,  # Whole image first (no _ROI in name)
-            x[0]  # Then alphabetically
-        ))
+        # Display files in a grid, one row per ROI
+        # Sort groups: Whole Image first, then ROI_1, ROI_2, etc.
+        def sort_key(item):
+            group_name = item[0]
+            if group_name == "Whole Image":
+                return (0, "")  # Whole image comes first
+            elif group_name.startswith("ROI_"):
+                # Extract ROI number for proper numeric sorting
+                try:
+                    roi_num = int(group_name.replace("ROI_", ""))
+                    return (1, roi_num)  # ROIs come after, sorted by number
+                except:
+                    return (1, group_name)
+            else:
+                return (2, group_name)  # Everything else comes last
+        
+        sorted_groups = sorted(grouped_files.items(), key=sort_key)
         
         row = 0
         for group_name, files in sorted_groups:
-            # Add group label with enhanced formatting
+            # Add group label with enhanced formatting and clear ROI identification
             label = QLabel(group_name)
-            label.setStyleSheet("font-weight: bold; color: #ffcc00; font-size: 12px; padding: 5px;")
+            label.setStyleSheet("font-weight: bold; color: #ffcc00; font-size: 14px; padding: 5px;")
             label.setWordWrap(True)
             grid_layout.addWidget(label, row, 0)
             col = 1
@@ -306,6 +369,15 @@ class PostProcessingTab(QWidget):
         if not self.results_dir:
             return []
 
+        # Map rolling-specific display types to standard ones for keyword lookup
+        display_type_mapping = {
+            "Period Plots": "ACF Plots",
+            "Shift Plots": "CCF Plots"
+        }
+        
+        # Use mapped type for keyword lookup
+        lookup_type = display_type_mapping.get(display_type, display_type)
+
         keywords = {
             "Summary": "summary",  # Summary data and mean plots
             "ACF Plots": {"mean": "Mean ACF", "indv": ["Individual_ACF_plots", "ACF"]},
@@ -323,17 +395,16 @@ class PostProcessingTab(QWidget):
         file_paths = []
         
         # Handle different display types - search in original structure
-        if display_type == "Summary":
+        if lookup_type == "Summary":
             # Look for summary CSV files in main directory and subdirectories
             for root, dirs, files in os.walk(self.results_dir):
                 for f in files:
-                    if f.endswith(".csv") and keywords[display_type] in f:
+                    if f.endswith(".csv") and keywords[lookup_type] in f:
                         file_path = os.path.join(root, f)
                         file_paths.append(file_path)
         else:
             # Handle plot types that can show either summary or individual
-            selected_type = display_type  # The type the user selected to view
-            keyword_info = keywords.get(selected_type)  # Get keywords for selected type
+            keyword_info = keywords.get(lookup_type)  # Get keywords for selected type
             if keyword_info:
                 # Check if individual plots are requested
                 if hasattr(self, 'show_individual') and self.show_individual.isChecked():
@@ -356,8 +427,8 @@ class PostProcessingTab(QWidget):
                             # Check for rolling analysis plots (in summary_plots subdirectory)
                             elif f.endswith(".png") and os.path.basename(root) == "summary_plots":
                                 # Check if file matches rolling analysis keywords
-                                if selected_type in rolling_keywords:
-                                    for rolling_kw in rolling_keywords[selected_type]:
+                                if lookup_type in rolling_keywords:
+                                    for rolling_kw in rolling_keywords[lookup_type]:
                                         if rolling_kw in f:
                                             file_path = os.path.join(root, f)
                                             file_paths.append(file_path)
@@ -511,7 +582,11 @@ class PostProcessingTab(QWidget):
         display_type = self.display_combo.currentText()
         
         # Show/hide individual plot checkbox based on display type
-        self.show_individual.setVisible(display_type in ["ACF Plots", "CCF Plots", "Peak Properties"])
+        # Works for both standard (ACF/CCF/Peak) and rolling (Period/Shift/Peak) names
+        self.show_individual.setVisible(display_type in [
+            "ACF Plots", "CCF Plots", "Peak Properties",  # Standard/Kymograph
+            "Period Plots", "Shift Plots"  # Rolling
+        ])
         
         if self.results_dir and os.path.exists(self.results_dir):
             self.show_results()
