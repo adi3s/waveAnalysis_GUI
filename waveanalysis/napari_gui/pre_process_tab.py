@@ -193,6 +193,11 @@ class PreProcessingTab(QWidget):
             "threshold": self.threshold.value(),
             "smooth_window": self.smooth_window.value(),
             "smooth_order": self.smooth_order.value(),
+            # Summary plot options
+            "plot_summary_acfs": self.acf_checkbox.isChecked(),
+            "plot_summary_ccfs": self.ccf_checkbox.isChecked(),
+            "plot_summary_peaks": self.peaks_checkbox.isChecked(),
+            # Individual plot options
             "plot_indv_acfs": self.indv_acf_checkbox.isChecked(),
             "plot_indv_ccfs": self.indv_ccf_checkbox.isChecked(),
             "plot_indv_peaks": self.indv_peaks_checkbox.isChecked(),

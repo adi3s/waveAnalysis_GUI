@@ -25,6 +25,12 @@ class PostProcessingTab(QWidget):
         self.loaded_images = []  # Store list of loaded images
         self.loaded_image_names = []  # Store list of loaded image names
         self.canvases = []
+        # Store which summary plots were requested
+        self.plot_preferences = {
+            "plot_summary_acfs": True,
+            "plot_summary_ccfs": True,
+            "plot_summary_peaks": True
+        }
         
         # Main layout
         layout = QVBoxLayout()
@@ -132,14 +138,19 @@ class PostProcessingTab(QWidget):
         self.display_combo.blockSignals(True)  # Prevent triggering change event
         self.display_combo.clear()
         
+        # Always add Summary
+        self.display_combo.addItem("Summary")
+        
         if self.is_rolling_analysis():
             # Rolling analysis uses different terminology
-            self.display_combo.addItems([
-                "Summary",
-                "Period Plots",
-                "Shift Plots",
-                "Peak Properties"
-            ])
+            # Only add if they were generated
+            if self.plot_preferences.get("plot_summary_acfs", True):
+                self.display_combo.addItem("Period Plots")
+            if self.plot_preferences.get("plot_summary_ccfs", True):
+                self.display_combo.addItem("Shift Plots")
+            if self.plot_preferences.get("plot_summary_peaks", True):
+                self.display_combo.addItem("Peak Properties")
+            
             # Try to maintain selection with mapping
             mapping = {
                 "ACF Plots": "Period Plots",
@@ -150,12 +161,14 @@ class PostProcessingTab(QWidget):
             new_selection = mapping.get(current_selection, "Summary")
         else:
             # Standard/Kymograph analysis uses traditional names
-            self.display_combo.addItems([
-                "Summary",
-                "ACF Plots",
-                "CCF Plots",
-                "Peak Properties"
-            ])
+            # Only add if they were generated
+            if self.plot_preferences.get("plot_summary_acfs", True):
+                self.display_combo.addItem("ACF Plots")
+            if self.plot_preferences.get("plot_summary_ccfs", True):
+                self.display_combo.addItem("CCF Plots")
+            if self.plot_preferences.get("plot_summary_peaks", True):
+                self.display_combo.addItem("Peak Properties")
+            
             # Try to maintain selection with reverse mapping
             mapping = {
                 "Period Plots": "ACF Plots",
@@ -179,6 +192,61 @@ class PostProcessingTab(QWidget):
     def set_loaded_image_names(self, image_names):
         """Set the list of loaded image names (without extension) for labeling"""
         self.loaded_image_names = image_names if image_names else []
+
+    def set_plot_preferences(self, pre_params):
+        """Set which summary plots were requested during analysis"""
+        if pre_params:
+            self.plot_preferences = {
+                "plot_summary_acfs": pre_params.get("plot_summary_acfs", True),
+                "plot_summary_ccfs": pre_params.get("plot_summary_ccfs", True),
+                "plot_summary_peaks": pre_params.get("plot_summary_peaks", True)
+            }
+        self.update_display_options_for_preferences()
+
+    def update_display_options_for_preferences(self):
+        """Update display combo box to only show plot types that were generated"""
+        if not hasattr(self, 'display_combo'):
+            return
+            
+        current_selection = self.display_combo.currentText()
+        self.display_combo.blockSignals(True)
+        
+        # Get current items to preserve rolling vs standard naming
+        current_items = [self.display_combo.itemText(i) for i in range(self.display_combo.count())]
+        is_rolling = "Period Plots" in current_items or "Shift Plots" in current_items
+        
+        # Clear and rebuild
+        self.display_combo.clear()
+        
+        # Always add Summary
+        self.display_combo.addItem("Summary")
+        
+        # Add ACF/Period plots if they were generated
+        if self.plot_preferences.get("plot_summary_acfs", True):
+            if is_rolling:
+                self.display_combo.addItem("Period Plots")
+            else:
+                self.display_combo.addItem("ACF Plots")
+        
+        # Add CCF/Shift plots if they were generated
+        if self.plot_preferences.get("plot_summary_ccfs", True):
+            if is_rolling:
+                self.display_combo.addItem("Shift Plots")
+            else:
+                self.display_combo.addItem("CCF Plots")
+        
+        # Add Peak Properties if they were generated
+        if self.plot_preferences.get("plot_summary_peaks", True):
+            self.display_combo.addItem("Peak Properties")
+        
+        # Try to restore previous selection if still available
+        index = self.display_combo.findText(current_selection)
+        if index >= 0:
+            self.display_combo.setCurrentIndex(index)
+        else:
+            self.display_combo.setCurrentIndex(0)  # Default to Summary
+        
+        self.display_combo.blockSignals(False)
 
     def set_roi_results(self, results_df):
         """Handle ROI measurement results (deprecated)"""

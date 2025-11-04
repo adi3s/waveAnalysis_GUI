@@ -61,9 +61,9 @@ class WaveAnalysisWidget(QWidget):
         self.tabs.addTab(self.values_scroll, "Values")
         self.tabs.addTab(self.roi_scroll, "ROI")
         self.tabs.addTab(self.pre_process_scroll, "Pre Processing")
-        self.tabs.addTab(self.post_process_tab, "Post Processing")  # This one has its own scroll area
+        self.tabs.addTab(self.post_process_tab, "Post Processing")  # Own scroll area
 
-        # Set up main layout - simplified without nested scroll areas
+        # Set up main layout
         layout = QVBoxLayout()
         layout.addWidget(self.tabs)
         layout.setContentsMargins(5, 5, 5, 5)  # Small margins for better appearance
@@ -170,7 +170,7 @@ class WaveAnalysisWidget(QWidget):
             pre_params = self.pre_process_tab.get_params()
             active_rois = self.get_active_rois()
             
-            # Create main results directory (same structure as before)
+            # Create main results directory
             first_image_dir = os.path.dirname(loaded_images[0])
             now = datetime.datetime.now()
             timestamp = now.strftime('%Y%m%d%H%M')
@@ -235,9 +235,11 @@ class WaveAnalysisWidget(QWidget):
 
             # Set results directory and show results
             self.post_process_tab.set_results_directory(main_results_dir)
-            # Pass the loaded image names (not paths) to post_process_tab
+            # Pass the loaded image names to post_process_tab
             loaded_image_names = [os.path.splitext(os.path.basename(img))[0] for img in loaded_images]
             self.post_process_tab.set_loaded_image_names(loaded_image_names)
+            # Pass the plot preferences to post_process_tab
+            self.post_process_tab.set_plot_preferences(pre_params)
             self.post_process_tab.show_results(self.results, params)
             self.tabs.setCurrentIndex(3)
 
@@ -338,13 +340,13 @@ class WaveAnalysisWidget(QWidget):
                 # The workflow will handle extracting the image data using the ROI mask
                 roi_results = combined_workflow(
                     folder_path=results_dir,  # Use main results directory
-                    group_names=[f"{image_name}_ROI_{i+1}"],  # Use descriptive but flat naming
+                    group_names=[f"{image_name}_ROI_{i+1}"],  # Use descriptive name
                     log_params=roi_log_params,
                     analysis_type=params.get("type", "standard"),
                     acf_peak_thresh=pre_params.get("threshold"),
-                    plot_summary_ACFs=True,
-                    plot_summary_CCFs=True,
-                    plot_summary_peaks=True,
+                    plot_summary_ACFs=pre_params.get("plot_summary_acfs", True),
+                    plot_summary_CCFs=pre_params.get("plot_summary_ccfs", True),
+                    plot_summary_peaks=pre_params.get("plot_summary_peaks", True),
                     plot_indv_ACFs=pre_params.get("plot_indv_acfs", False),
                     plot_indv_CCFs=pre_params.get("plot_indv_ccfs", False),
                     plot_indv_peaks=pre_params.get("plot_indv_peaks", False),
@@ -388,9 +390,9 @@ class WaveAnalysisWidget(QWidget):
                 log_params=whole_image_log_params,
                 analysis_type=params.get("type", "standard"),
                 acf_peak_thresh=pre_params.get("threshold"),
-                plot_summary_ACFs=True,
-                plot_summary_CCFs=True,
-                plot_summary_peaks=True,
+                plot_summary_ACFs=pre_params.get("plot_summary_acfs", True),
+                plot_summary_CCFs=pre_params.get("plot_summary_ccfs", True),
+                plot_summary_peaks=pre_params.get("plot_summary_peaks", True),
                 plot_indv_ACFs=pre_params.get("plot_indv_acfs", False),
                 plot_indv_CCFs=pre_params.get("plot_indv_ccfs", False),
                 plot_indv_peaks=pre_params.get("plot_indv_peaks", False),
@@ -477,9 +479,9 @@ class WaveAnalysisWidget(QWidget):
                     log_params=self.log_params,
                     analysis_type=params.get("type", "standard"),
                     acf_peak_thresh=pre_params.get("threshold"),
-                    plot_summary_ACFs=True,
-                    plot_summary_CCFs=True,
-                    plot_summary_peaks=True,
+                    plot_summary_ACFs=pre_params.get("plot_summary_acfs", True),
+                    plot_summary_CCFs=pre_params.get("plot_summary_ccfs", True),
+                    plot_summary_peaks=pre_params.get("plot_summary_peaks", True),
                     plot_indv_ACFs=pre_params.get("plot_indv_acfs", False),
                     plot_indv_CCFs=pre_params.get("plot_indv_ccfs", False),
                     plot_indv_peaks=pre_params.get("plot_indv_peaks", False),
@@ -529,9 +531,9 @@ class WaveAnalysisWidget(QWidget):
                 log_params=self.log_params,
                 analysis_type=params.get("type", "standard"),
                 acf_peak_thresh=pre_params.get("threshold"),
-                plot_summary_ACFs=True,
-                plot_summary_CCFs=True,
-                plot_summary_peaks=True,
+                plot_summary_ACFs=pre_params.get("plot_summary_acfs", True),
+                plot_summary_CCFs=pre_params.get("plot_summary_ccfs", True),
+                plot_summary_peaks=pre_params.get("plot_summary_peaks", True),
                 plot_indv_ACFs=pre_params.get("plot_indv_acfs", False),
                 plot_indv_CCFs=pre_params.get("plot_indv_ccfs", False),
                 plot_indv_peaks=pre_params.get("plot_indv_peaks", False),
