@@ -31,6 +31,11 @@ class PostProcessingTab(QWidget):
             "plot_summary_ccfs": True,
             "plot_summary_peaks": True
         }
+        # Store what type of analysis was performed
+        self.analysis_scope = {
+            "analyze_whole_image": False,
+            "analyze_roi_data": False
+        }
         
         # Main layout
         layout = QVBoxLayout()
@@ -38,6 +43,24 @@ class PostProcessingTab(QWidget):
         # Add status bar at the top
         self.status_label = QLabel("No results loaded")
         layout.addWidget(self.status_label)
+        
+        # Add image selector dropdown for filtering (initially hidden)
+        self.image_filter_widget = QWidget()
+        filter_layout = QHBoxLayout()
+        filter_layout.setContentsMargins(5, 5, 5, 5)
+        filter_label = QLabel("Filter by Image:")
+        filter_label.setStyleSheet("font-weight: bold; padding: 5px;")
+        filter_layout.addWidget(filter_label)
+        
+        self.image_filter_combo = QComboBox()
+        self.image_filter_combo.addItem("Show All Images")
+        self.image_filter_combo.currentIndexChanged.connect(self.on_image_filter_changed)
+        filter_layout.addWidget(self.image_filter_combo)
+        filter_layout.addStretch()
+        
+        self.image_filter_widget.setLayout(filter_layout)
+        self.image_filter_widget.setVisible(False)
+        layout.addWidget(self.image_filter_widget)
         
         # Results view area with a scrollable widget
         self.scroll_area = QScrollArea()
@@ -192,6 +215,30 @@ class PostProcessingTab(QWidget):
     def set_loaded_image_names(self, image_names):
         """Set the list of loaded image names (without extension) for labeling"""
         self.loaded_image_names = image_names if image_names else []
+        
+        # Update the filter dropdown
+        self.update_image_filter()
+    
+    def update_image_filter(self):
+        """Update the image filter dropdown"""
+        # Clear and repopulate the filter combo
+        self.image_filter_combo.blockSignals(True)
+        self.image_filter_combo.clear()
+        self.image_filter_combo.addItem("Show All Images")
+        
+        if len(self.loaded_image_names) > 1:
+            for name in self.loaded_image_names:
+                self.image_filter_combo.addItem(name)
+            self.image_filter_widget.setVisible(True)
+        else:
+            self.image_filter_widget.setVisible(False)
+        
+        self.image_filter_combo.blockSignals(False)
+    
+    def on_image_filter_changed(self, index):
+        """Handle image filter selection change"""
+        if self.results_dir and os.path.exists(self.results_dir):
+            self.show_results()
 
     def set_plot_preferences(self, pre_params):
         """Set which summary plots were requested during analysis"""
@@ -200,6 +247,11 @@ class PostProcessingTab(QWidget):
                 "plot_summary_acfs": pre_params.get("plot_summary_acfs", True),
                 "plot_summary_ccfs": pre_params.get("plot_summary_ccfs", True),
                 "plot_summary_peaks": pre_params.get("plot_summary_peaks", True)
+            }
+            # Also capture what type of analysis was performed
+            self.analysis_scope = {
+                "analyze_whole_image": pre_params.get("analyze_whole_image", False),
+                "analyze_roi_data": pre_params.get("analyze_roi_data", False)
             }
         self.update_display_options_for_preferences()
 
@@ -310,11 +362,22 @@ class PostProcessingTab(QWidget):
             image_name = None
             roi_id = None
             
-            # Look for ROI directory in path
+            # Look for ROI directory in path (for combined/standard workflow)
             for part in filepath_parts:
                 if part.startswith("ROI_"):
                     roi_id = part  # e.g., "ROI_1"
                     break
+            
+            # For rolling workflow, ROI info is in the filename, not the path
+            # Check if this is a rolling analysis file (in summary_plots folder)
+            if "summary_plots" in filepath_parts and not roi_id:
+                # Check for ROI pattern in filename (e.g., "imagename_ROI_1_Period.png")
+                if "_ROI_" in filename:
+                    try:
+                        roi_num = filename.split("_ROI_")[1].split("_")[0]
+                        roi_id = f"ROI_{roi_num}"
+                    except:
+                        pass
             
             # Try to match with loaded image names first (highest priority)
             for loaded_name in self.loaded_image_names:
@@ -328,13 +391,6 @@ class PostProcessingTab(QWidget):
                 if "_ROI_" in filename:
                     # Extract image name before _ROI_
                     image_name = filename.split("_ROI_")[0]
-                    # Extract ROI number if not already found
-                    if not roi_id:
-                        try:
-                            roi_num = filename.split("_ROI_")[1].split("_")[0]
-                            roi_id = f"ROI_{roi_num}"
-                        except:
-                            pass
                 
                 # If no image name found yet, try to extract from parent directory
                 if not image_name:
@@ -353,6 +409,11 @@ class PostProcessingTab(QWidget):
                         image_name = filename.replace("_Mean ACF.png", "").replace("_Mean CCF.png", "")
                         image_name = image_name.replace("_Peak Props.png", "").replace("_summary.csv", "")
                         image_name = image_name.split("_Individual_")[0]
+                        # For rolling analysis, remove the metric suffixes
+                        for suffix in ["_Period", "_Shift", "_Width", "_Max", "_Min", "_Amp"]:
+                            if image_name.endswith(suffix):
+                                image_name = image_name[:-len(suffix)]
+                                break
             
             # Create group identifier - prioritize ROI organization
             # Format: ROI_1, ROI_2, etc. OR "Whole Image" for non-ROI results
@@ -387,15 +448,63 @@ class PostProcessingTab(QWidget):
         
         row = 0
         for group_name, files in sorted_groups:
-            # Add group label with enhanced formatting and clear ROI identification
-            label = QLabel(group_name)
-            label.setStyleSheet("font-weight: bold; color: #ffcc00; font-size: 14px; padding: 5px;")
+            # Skip Whole_Image group if only ROI analysis was performed
+            if group_name == "Whole Image":
+                if not self.analysis_scope.get("analyze_whole_image", False):
+                    # User didn't request whole image analysis, skip this group
+                    continue
+            
+            # Skip ROI groups if only whole image analysis was performed
+            if group_name.startswith("ROI_"):
+                if not self.analysis_scope.get("analyze_roi_data", False):
+                    # User didn't request ROI analysis, skip this group
+                    continue
+            
+            # Get the selected filter
+            selected_filter = self.image_filter_combo.currentText()
+            
+            # Filter files based on selected image
+            filtered_files = []
+            group_images = set()
+            
+            for file_path in files:
+                # Determine which image this file belongs to
+                file_image = None
+                for loaded_name in self.loaded_image_names:
+                    if loaded_name in file_path or loaded_name in os.sep.join(file_path.split(os.sep)):
+                        file_image = loaded_name
+                        group_images.add(loaded_name)
+                        break
+                
+                # Apply filter
+                if selected_filter == "Show All Images":
+                    filtered_files.append(file_path)
+                elif file_image == selected_filter:
+                    filtered_files.append(file_path)
+            
+            # Skip this group if no files match the filter
+            if not filtered_files:
+                continue
+            
+            # Create clear, simple label text
+            label_text = group_name
+            if len(group_images) == 1:
+                label_text += f" ({list(group_images)[0]})"
+            elif len(group_images) > 1:
+                label_text += f" (multiple images)"
+            
+            label = QLabel(label_text)
+            label.setStyleSheet(
+                "font-weight: bold; font-size: 13px; "
+                "padding: 6px; background-color: rgba(100, 100, 100, 0.2); "
+                "border-left: 3px solid #888; border-radius: 2px;"
+            )
             label.setWordWrap(True)
             grid_layout.addWidget(label, row, 0)
             col = 1
             
-            # Add plots for this group
-            for file_path in files:
+            # Add plots for this group (using filtered files)
+            for file_path in filtered_files:
                 if file_path.endswith(".png"):
                     # Create container and canvas
                     container = QWidget()
@@ -465,11 +574,22 @@ class PostProcessingTab(QWidget):
         # Handle different display types - search in original structure
         if lookup_type == "Summary":
             # Look for summary CSV files in main directory and subdirectories
+            # Include both files with "summary" in name and general CSV files in results directories
             for root, dirs, files in os.walk(self.results_dir):
                 for f in files:
-                    if f.endswith(".csv") and keywords[lookup_type] in f:
-                        file_path = os.path.join(root, f)
-                        file_paths.append(file_path)
+                    if f.endswith(".csv"):
+                        # Include if it has "summary" in the name
+                        if keywords[lookup_type] in f.lower():
+                            file_path = os.path.join(root, f)
+                            file_paths.append(file_path)
+                        # Also include CSV files in ROI subdirectories or image subdirectories
+                        elif any(part.startswith("ROI_") for part in root.split(os.sep)):
+                            file_path = os.path.join(root, f)
+                            file_paths.append(file_path)
+                        # Include CSV files in "Whole Image" subdirectories
+                        elif "Whole" in root or "whole" in root.lower():
+                            file_path = os.path.join(root, f)
+                            file_paths.append(file_path)
         else:
             # Handle plot types that can show either summary or individual
             keyword_info = keywords.get(lookup_type)  # Get keywords for selected type
@@ -539,8 +659,28 @@ class PostProcessingTab(QWidget):
                     ax.imshow(img)
             
             ax.axis("off")
-            # Keep original filename as title
-            ax.set_title(os.path.basename(image_path), fontsize=10)
+            
+            # Simple, clear title with image name
+            filename = os.path.basename(image_path)
+            
+            # Try to extract image name from path or filename
+            image_identifier = None
+            filepath_parts = image_path.split(os.sep)
+            
+            # Look for loaded image names in the path
+            for loaded_name in self.loaded_image_names:
+                if loaded_name in filename or loaded_name in os.sep.join(filepath_parts):
+                    image_identifier = loaded_name
+                    break
+            
+            # Create simple, clear title
+            if image_identifier and len(self.loaded_image_names) > 1:
+                # Only show image identifier when multiple images are loaded
+                title = f"{image_identifier}\n{filename}"
+                ax.set_title(title, fontsize=9, weight='bold')
+            else:
+                ax.set_title(filename, fontsize=10)
+            
             fig.tight_layout()
             canvas.draw()
         except Exception as e:
