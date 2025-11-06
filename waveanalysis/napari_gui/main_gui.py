@@ -122,6 +122,10 @@ class WaveAnalysisWidget(QWidget):
         if hasattr(self, 'post_process_tab'):
             self.post_process_tab.set_loaded_images(image_list)
         
+        # Update the ROI tab to know about all loaded images
+        if hasattr(self, 'roi_tab'):
+            self.roi_tab.set_loaded_images(image_list)
+        
         # If we have images, set the first one as current if no current image exists
         if image_list and not self.current_image_path:
             self.handle_new_image(image_list[0])
@@ -255,8 +259,12 @@ class WaveAnalysisWidget(QWidget):
         active_rois = self.get_active_rois()
         
         # Get analysis type selections from pre-process tab
-        analyze_whole_image = pre_params.get("analyze_whole_image", True)
+        analyze_whole_image = pre_params.get("analyze_whole_image", False)
         analyze_roi_data = pre_params.get("analyze_roi_data", False)
+        
+        # If neither is selected, default to whole image for backward compatibility
+        if not analyze_whole_image and not analyze_roi_data:
+            analyze_whole_image = True
         
         # Get image name for file naming
         image_name = os.path.splitext(os.path.basename(image_path))[0]
@@ -267,12 +275,16 @@ class WaveAnalysisWidget(QWidget):
         # Process ROIs if user selected ROI analysis and ROIs exist
         if active_rois and analyze_roi_data:
             for i, roi in enumerate(active_rois):
+                # Create ROI-specific subdirectory
+                roi_subdir = os.path.join(results_dir, f"ROI_{i+1}", image_name)
+                os.makedirs(roi_subdir, exist_ok=True)
+                
                 # Update log params to include image name in file naming
                 roi_log_params = log_params.copy()
                 roi_log_params["Files Processed"] = [f"{image_name}_ROI_{i+1}"]
                     
                 roi_results = rolling_workflow(
-                    folder_path=results_dir,  # Use main results directory
+                    folder_path=roi_subdir,  # Use ROI-specific subdirectory
                     log_params=roi_log_params,
                     box_size=params.get("box_size"),
                     box_shift=params.get("bin_shift"),
@@ -287,11 +299,15 @@ class WaveAnalysisWidget(QWidget):
         
         # Process the whole image if user selected whole image analysis
         if analyze_whole_image:
+            # Create Whole Image subdirectory
+            whole_image_subdir = os.path.join(results_dir, "Whole_Image", image_name)
+            os.makedirs(whole_image_subdir, exist_ok=True)
+            
             whole_image_log_params = log_params.copy()
             whole_image_log_params["Files Processed"] = [image_name]
             
             whole_image_results = rolling_workflow(
-                folder_path=results_dir,
+                folder_path=whole_image_subdir,  # Use Whole Image subdirectory
                 log_params=whole_image_log_params,
                 box_size=params.get("box_size"),
                 box_shift=params.get("bin_shift"),
@@ -315,8 +331,13 @@ class WaveAnalysisWidget(QWidget):
         active_rois = self.get_active_rois()
         
         # Get analysis type selections from pre-process tab
-        analyze_whole_image = pre_params.get("analyze_whole_image", True)
+        # Don't use defaults - use exactly what the user selected
+        analyze_whole_image = pre_params.get("analyze_whole_image", False)
         analyze_roi_data = pre_params.get("analyze_roi_data", False)
+        
+        # If neither is selected, default to whole image for backward compatibility
+        if not analyze_whole_image and not analyze_roi_data:
+            analyze_whole_image = True
         
         # Get image name for file naming
         image_name = os.path.splitext(os.path.basename(image_path))[0]
@@ -408,6 +429,20 @@ class WaveAnalysisWidget(QWidget):
             if isinstance(whole_image_results, pd.DataFrame):
                 whole_image_results['ROI_ID'] = 'Whole_Image'
             all_results.append(whole_image_results)
+            
+            # Move the results into Whole_Image subdirectory (same structure as ROI results)
+            image_results_subdir = os.path.join(results_dir, image_name)
+            if os.path.exists(image_results_subdir):
+                # Create Whole_Image subdirectory
+                whole_image_subdir = os.path.join(results_dir, "Whole_Image")
+                os.makedirs(whole_image_subdir, exist_ok=True)
+                
+                # Move the image results directory into Whole_Image subdirectory
+                import shutil
+                dest_dir = os.path.join(whole_image_subdir, image_name)
+                if os.path.exists(dest_dir):
+                    shutil.rmtree(dest_dir)
+                shutil.move(image_results_subdir, dest_dir)
             
         # Combine results from all ROIs or whole image
         if all_results:
