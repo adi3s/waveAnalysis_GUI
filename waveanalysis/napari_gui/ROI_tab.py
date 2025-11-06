@@ -40,6 +40,8 @@ class ROITab(QWidget):
         self.roi_manager = None
         self.roi_manager_initialized = False
         self.roi_layer = None  # For fallback ROI layer
+        self.loaded_images = []  # Track all loaded images
+        self.roi_applies_to_all = True  # ROIs apply to all images by default
         self.init_ui()
 
     def init_ui(self):
@@ -65,10 +67,17 @@ class ROITab(QWidget):
         self.setup_instructions = QLabel(
             "1. Load an image in your application\n"
             "2. Click 'Initialize ROI Manager' to set up ROI annotation\n"
-            "3. Use the ROI manager tools to draw and manage ROIs"
+            "3. Use the ROI manager tools to draw and manage ROIs\n"
+            "4. ROIs will automatically apply to ALL loaded images"
         )
         self.setup_instructions.setWordWrap(True)
         setup_layout.addWidget(self.setup_instructions)
+        
+        # Add ROI scope information
+        self.roi_scope_label = QLabel("ROI Scope: Will apply to ALL loaded images")
+        self.roi_scope_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
+        self.roi_scope_label.setWordWrap(True)
+        setup_layout.addWidget(self.roi_scope_label)
         
         self.init_roi_btn = QPushButton("Initialize ROI Manager")
         self.init_roi_btn.clicked.connect(self.initialize_roi_manager)
@@ -437,12 +446,29 @@ class ROITab(QWidget):
                 self.status_label.setText("Status: Image loaded - Ready to initialize ROI Manager")
                 self.init_roi_btn.setEnabled(True)
             
-            # Clear existing ROIs when loading new image (if ROI manager exists)
-            if self.roi_manager:
-                try:
-                    self.roi_manager.clear_rois()
-                except Exception:
-                    pass  # Silently handle ROI clearing failures
+            # Don't clear existing ROIs - they should persist across images
+            # Update the ROI scope label to reflect the number of loaded images
+            self.update_roi_scope_label()
+    
+    def set_loaded_images(self, image_list):
+        """Set the list of all loaded images"""
+        self.loaded_images = image_list if image_list else []
+        self.update_roi_scope_label()
+    
+    def update_roi_scope_label(self):
+        """Update the ROI scope label to show how many images ROIs will apply to"""
+        num_images = len(self.loaded_images)
+        if num_images > 1:
+            self.roi_scope_label.setText(
+                f"ROI Scope: Will apply to ALL {num_images} loaded images"
+            )
+            self.roi_scope_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
+        elif num_images == 1:
+            self.roi_scope_label.setText("ROI Scope: Will apply to current image")
+            self.roi_scope_label.setStyleSheet("color: #2196F3; font-weight: bold;")
+        else:
+            self.roi_scope_label.setText("ROI Scope: No images loaded")
+            self.roi_scope_label.setStyleSheet("color: #FF9800; font-weight: bold;")
 
     def save_rois(self, auto=False):
         """Save ROIs to a file"""
