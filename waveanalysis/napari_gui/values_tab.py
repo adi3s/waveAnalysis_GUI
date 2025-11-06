@@ -261,6 +261,10 @@ class ValuesTab(QWidget):
         
         # Show group names for standard and kymograph analyses
         self.common_params.setVisible(analysis_type in ["standard", "kymograph"])
+        
+        # Notify pre-process tab about analysis type change
+        if hasattr(self.parent, 'pre_process_tab'):
+            self.parent.pre_process_tab.set_analysis_type(analysis_type)
     
     def save_parameters(self):
         """Save the parameters and update the parent widget"""
