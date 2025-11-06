@@ -20,6 +20,7 @@ class PreProcessingTab(QWidget):
         """Initialize the PreProcessingTab with the parent widget"""
         super().__init__(parent)
         self.parent = parent
+        self.current_analysis_type = "standard"  # Track current analysis type
         self.init_ui()
 
     def init_ui(self):
@@ -105,6 +106,7 @@ class PreProcessingTab(QWidget):
         summary_plots_group = QGroupBox("Summary Plots")
         summary_plots_layout = QVBoxLayout()
         
+        # Standard/Kymograph plot options
         self.acf_checkbox = QCheckBox("ACF Plots")
         self.acf_checkbox.setChecked(True)
         self.acf_checkbox.stateChanged.connect(self.on_acf_selected)
@@ -115,16 +117,35 @@ class PreProcessingTab(QWidget):
         self.ccf_checkbox.stateChanged.connect(self.on_ccf_selected)
         summary_plots_layout.addWidget(self.ccf_checkbox)
         
-        self.peaks_checkbox = QCheckBox("Peaks Plots")
+        self.peaks_checkbox = QCheckBox("Peak Properties")
         self.peaks_checkbox.setChecked(True)
         self.peaks_checkbox.stateChanged.connect(self.on_peaks_selected)
         summary_plots_layout.addWidget(self.peaks_checkbox)
         
+        # Rolling-specific plot options (initially hidden)
+        self.period_checkbox = QCheckBox("Period Plots")
+        self.period_checkbox.setChecked(True)
+        self.period_checkbox.stateChanged.connect(self.on_acf_selected)
+        self.period_checkbox.setVisible(False)
+        summary_plots_layout.addWidget(self.period_checkbox)
+        
+        self.shift_checkbox = QCheckBox("Shift Plots")
+        self.shift_checkbox.setChecked(True)
+        self.shift_checkbox.stateChanged.connect(self.on_ccf_selected)
+        self.shift_checkbox.setVisible(False)
+        summary_plots_layout.addWidget(self.shift_checkbox)
+        
+        self.rolling_peaks_checkbox = QCheckBox("Peak Properties")
+        self.rolling_peaks_checkbox.setChecked(True)
+        self.rolling_peaks_checkbox.stateChanged.connect(self.on_peaks_selected)
+        self.rolling_peaks_checkbox.setVisible(False)
+        summary_plots_layout.addWidget(self.rolling_peaks_checkbox)
+        
         summary_plots_group.setLayout(summary_plots_layout)
         plots_layout.addWidget(summary_plots_group)
         
-        # Individual bin plots subgroup
-        individual_plots_group = QGroupBox("Individual Bin Plots (Optional)")
+        # Individual bin plots subgroup (only for Standard/Kymograph)
+        self.individual_plots_group = QGroupBox("Individual Bin Plots (Optional)")
         individual_plots_layout = QVBoxLayout()
         
         # Warning label
@@ -145,8 +166,8 @@ class PreProcessingTab(QWidget):
         self.indv_peaks_checkbox.stateChanged.connect(self.on_indv_peaks_selected)
         individual_plots_layout.addWidget(self.indv_peaks_checkbox)
         
-        individual_plots_group.setLayout(individual_plots_layout)
-        plots_layout.addWidget(individual_plots_group)
+        self.individual_plots_group.setLayout(individual_plots_layout)
+        plots_layout.addWidget(self.individual_plots_group)
         
         plots_group.setLayout(plots_layout)
         
@@ -187,20 +208,64 @@ class PreProcessingTab(QWidget):
         """Emit signal when individual Peaks checkbox is toggled"""
         self.indv_peaks_selected.emit(state == Qt.Checked)
 
+    def set_analysis_type(self, analysis_type):
+        """Update the UI based on the analysis type (standard, rolling, kymograph)"""
+        self.current_analysis_type = analysis_type.lower()
+        
+        if self.current_analysis_type == "rolling":
+            # Hide standard/kymograph options
+            self.acf_checkbox.setVisible(False)
+            self.ccf_checkbox.setVisible(False)
+            self.peaks_checkbox.setVisible(False)
+            self.individual_plots_group.setVisible(False)
+            
+            # Show rolling-specific options
+            self.period_checkbox.setVisible(True)
+            self.shift_checkbox.setVisible(True)
+            self.rolling_peaks_checkbox.setVisible(True)
+        else:
+            # Show standard/kymograph options
+            self.acf_checkbox.setVisible(True)
+            self.ccf_checkbox.setVisible(True)
+            self.peaks_checkbox.setVisible(True)
+            self.individual_plots_group.setVisible(True)
+            
+            # Hide rolling-specific options
+            self.period_checkbox.setVisible(False)
+            self.shift_checkbox.setVisible(False)
+            self.rolling_peaks_checkbox.setVisible(False)
+    
     def get_params(self):
         """Return the current parameters for analysis"""
+        # Determine which checkboxes to use based on analysis type
+        if self.current_analysis_type == "rolling":
+            plot_summary_acfs = self.period_checkbox.isChecked()
+            plot_summary_ccfs = self.shift_checkbox.isChecked()
+            plot_summary_peaks = self.rolling_peaks_checkbox.isChecked()
+            # Rolling doesn't have individual plots
+            plot_indv_acfs = False
+            plot_indv_ccfs = False
+            plot_indv_peaks = False
+        else:
+            plot_summary_acfs = self.acf_checkbox.isChecked()
+            plot_summary_ccfs = self.ccf_checkbox.isChecked()
+            plot_summary_peaks = self.peaks_checkbox.isChecked()
+            plot_indv_acfs = self.indv_acf_checkbox.isChecked()
+            plot_indv_ccfs = self.indv_ccf_checkbox.isChecked()
+            plot_indv_peaks = self.indv_peaks_checkbox.isChecked()
+        
         return {
             "threshold": self.threshold.value(),
             "smooth_window": self.smooth_window.value(),
             "smooth_order": self.smooth_order.value(),
             # Summary plot options
-            "plot_summary_acfs": self.acf_checkbox.isChecked(),
-            "plot_summary_ccfs": self.ccf_checkbox.isChecked(),
-            "plot_summary_peaks": self.peaks_checkbox.isChecked(),
+            "plot_summary_acfs": plot_summary_acfs,
+            "plot_summary_ccfs": plot_summary_ccfs,
+            "plot_summary_peaks": plot_summary_peaks,
             # Individual plot options
-            "plot_indv_acfs": self.indv_acf_checkbox.isChecked(),
-            "plot_indv_ccfs": self.indv_ccf_checkbox.isChecked(),
-            "plot_indv_peaks": self.indv_peaks_checkbox.isChecked(),
+            "plot_indv_acfs": plot_indv_acfs,
+            "plot_indv_ccfs": plot_indv_ccfs,
+            "plot_indv_peaks": plot_indv_peaks,
             # ROI processing parameters
             "roi_channel": self.roi_channel_combo.currentText(),
             "process_all_frames": self.process_all_frames.isChecked(),
