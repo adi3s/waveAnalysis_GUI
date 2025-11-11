@@ -204,6 +204,12 @@ class ValuesTab(QWidget):
         std_layout = QFormLayout()
         std_layout.addRow("Box Size (px):", self.std_box_size)
         std_layout.addRow("Bin Shift (px):", self.std_bin_shift)
+        
+        # Add preview button
+        self.std_preview_btn = QPushButton("Preview Box Grid")
+        self.std_preview_btn.clicked.connect(lambda: self.preview_boxes("standard"))
+        std_layout.addRow(self.std_preview_btn)
+        
         self.standard_params.setLayout(std_layout)
 
         # Rolling Parameters
@@ -225,6 +231,12 @@ class ValuesTab(QWidget):
         roll_layout.addRow("Bin Shift (px):", self.roll_bin_shift)
         roll_layout.addRow("Subframe Size:", self.roll_sub_size)
         roll_layout.addRow("Subframe Shift:", self.roll_sub_shift)
+        
+        # Add preview button
+        self.roll_preview_btn = QPushButton("Preview Box Grid")
+        self.roll_preview_btn.clicked.connect(lambda: self.preview_boxes("rolling"))
+        roll_layout.addRow(self.roll_preview_btn)
+        
         self.rolling_params.setLayout(roll_layout)
 
         # Kymograph Parameters
@@ -240,6 +252,12 @@ class ValuesTab(QWidget):
         kymo_layout.addRow("Line Width (px):", self.kymo_line_width)
         kymo_layout.addRow("Bin Shift (px):", self.kymo_bin_shift)
         kymo_layout.addRow(self.calc_speed)
+        
+        # Add preview button
+        self.kymo_preview_btn = QPushButton("Preview Line Grid")
+        self.kymo_preview_btn.clicked.connect(lambda: self.preview_boxes("kymograph"))
+        kymo_layout.addRow(self.kymo_preview_btn)
+        
         self.kymo_params.setLayout(kymo_layout)
 
         # Common Parameters
@@ -418,3 +436,132 @@ class ValuesTab(QWidget):
         except Exception as e:
             # Error loading settings - fail silently and continue with defaults
             pass
+    
+    def preview_boxes(self, analysis_type):
+        """Preview the box/line grid on the current image in napari viewer"""
+        from qtpy.QtWidgets import QMessageBox
+        import numpy as np
+        
+        # Check if an image is loaded
+        if not self.current_image_path:
+            QMessageBox.warning(self, "No Image", "Please load an image first.")
+            return
+        
+        # Check if parent has viewer
+        if not hasattr(self.parent, 'viewer'):
+            QMessageBox.warning(self, "No Viewer", "Napari viewer not available.")
+            return
+        
+        viewer = self.parent.viewer
+        
+        # Check if image is in viewer
+        if len(viewer.layers) == 0:
+            QMessageBox.warning(self, "No Image", "No image is displayed in the viewer.")
+            return
+        
+        # Get the current image layer
+        image_layer = viewer.layers[0]  # Assume first layer is the image
+        image_shape = image_layer.data.shape
+        
+        # Get dimensions (handle both 2D and 3D/4D images)
+        if len(image_shape) >= 2:
+            height, width = image_shape[-2:]
+        else:
+            QMessageBox.warning(self, "Invalid Image", "Image dimensions not supported.")
+            return
+        
+        # Get parameters based on analysis type
+        if analysis_type == "standard":
+            box_size = self.std_box_size.value()
+            step = self.std_bin_shift.value()
+            grid_type = "boxes"
+        elif analysis_type == "rolling":
+            box_size = self.roll_box_size.value()
+            step = self.roll_bin_shift.value()
+            grid_type = "boxes"
+        elif analysis_type == "kymograph":
+            box_size = self.kymo_line_width.value()
+            step = self.kymo_bin_shift.value()
+            grid_type = "lines"
+        else:
+            return
+        
+        # Remove existing preview layer if it exists
+        for layer in viewer.layers:
+            if layer.name == "Box Grid Preview":
+                viewer.layers.remove(layer)
+        
+        # Calculate grid positions
+        ind = box_size // 2
+        
+        if grid_type == "boxes":
+            # Create box grid (same logic as create_multi_frame_bin_array)
+            y_positions = list(range(ind, height - ind, step))
+            x_positions = list(range(ind, width - ind, step))
+            
+            # Create shapes for each box
+            shapes_data = []
+            for y in y_positions:
+                for x in x_positions:
+                    # Define box corners: [top-left, top-right, bottom-right, bottom-left]
+                    box = np.array([
+                        [y - ind, x - ind],
+                        [y - ind, x + ind],
+                        [y + ind, x + ind],
+                        [y + ind, x - ind]
+                    ])
+                    shapes_data.append(box)
+            
+            # Add shapes layer
+            viewer.add_shapes(
+                shapes_data,
+                shape_type='rectangle',
+                edge_color='cyan',
+                edge_width=2,
+                face_color='transparent',
+                name='Box Grid Preview'
+            )
+            
+            # Show info
+            num_boxes = len(shapes_data)
+            QMessageBox.information(
+                self, 
+                "Grid Preview", 
+                f"Preview created with {num_boxes} boxes\n"
+                f"Box size: {box_size}px\n"
+                f"Step: {step}px\n"
+                f"Grid dimensions: {len(x_positions)} x {len(y_positions)}"
+            )
+            
+        elif grid_type == "lines":
+            # Create vertical line grid for kymograph
+            x_positions = list(range(0, width, step))
+            
+            # Create lines
+            shapes_data = []
+            for x in x_positions:
+                # Define vertical line from top to bottom
+                line = np.array([
+                    [0, x],
+                    [height - 1, x]
+                ])
+                shapes_data.append(line)
+            
+            # Add shapes layer
+            viewer.add_shapes(
+                shapes_data,
+                shape_type='line',
+                edge_color='cyan',
+                edge_width=box_size,  # Line width
+                name='Box Grid Preview'
+            )
+            
+            # Show info
+            num_lines = len(shapes_data)
+            QMessageBox.information(
+                self, 
+                "Grid Preview", 
+                f"Preview created with {num_lines} vertical lines\n"
+                f"Line width: {box_size}px\n"
+                f"Step: {step}px"
+            )
