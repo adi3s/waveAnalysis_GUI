@@ -62,6 +62,7 @@ class ValuesTab(QWidget):
         # Image list with scroll area
         self.image_list = QListWidget()
         self.image_list.setMaximumHeight(200)  # Set maximum height to enable scrolling
+        self.image_list.itemSelectionChanged.connect(self.on_image_selection_changed)
         load_layout.addWidget(QLabel("Loaded Images/Movies:"))
         load_layout.addWidget(self.image_list)
         
@@ -115,44 +116,54 @@ class ValuesTab(QWidget):
         self.resize(500, 450)  # Default size
 
     def load_image(self):
-        """Load an image or movie file and add it to the list"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Open Image/Movie", "", 
+        """Load one or more image/movie files and add them to the list"""
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self, "Open Image/Movie(s)", "", 
             "Image/Movie files (*.tif *.tiff *.png *.jpg *.jpeg *.lsm)"
         )
         
-        if file_path:
-            # Check if file is already loaded
-            if file_path in self.image_files:
+        if file_paths:
+            # Track newly added files
+            newly_added = []
+            
+            for file_path in file_paths:
+                # Check if file is already loaded
+                if file_path in self.image_files:
+                    continue
+                
+                # Add to image list
+                self.image_files.append(file_path)
+                item_text = f"{Path(file_path).name}"
+                
+                # Try to get image info (this could be enhanced to read actual image data)
+                try:
+                    # Add file size info
+                    file_size = os.path.getsize(file_path)
+                    if file_size > 1024 * 1024:  # > 1MB
+                        size_str = f" ({file_size / (1024 * 1024):.1f} MB)"
+                    else:
+                        size_str = f" ({file_size / 1024:.1f} KB)"
+                    item_text += size_str
+                except Exception:
+                    pass  # If we can't get size, just use filename
+                
+                self.image_list.addItem(item_text)
+                newly_added.append(file_path)
+            
+            if newly_added:
+                # Set the first newly added as current image
+                self.current_image_path = newly_added[0]
+                
+                # Emit signals for each newly added file
+                for file_path in newly_added:
+                    self.image_loaded.emit(file_path)
+                
+                # Emit update signal once for all changes
+                self.images_updated.emit(self.image_files.copy())
+            else:
                 from qtpy.QtWidgets import QMessageBox
                 QMessageBox.information(self, "Already Loaded", 
-                                      f"File '{Path(file_path).name}' is already in the list.")
-                return
-            
-            # Add to image list
-            self.image_files.append(file_path)
-            item_text = f"{Path(file_path).name}"
-            
-            # Try to get image info (this could be enhanced to read actual image data)
-            try:
-                # Add file size info
-                file_size = os.path.getsize(file_path)
-                if file_size > 1024 * 1024:  # > 1MB
-                    size_str = f" ({file_size / (1024 * 1024):.1f} MB)"
-                else:
-                    size_str = f" ({file_size / 1024:.1f} KB)"
-                item_text += size_str
-            except Exception:
-                pass  # If we can't get size, just use filename
-            
-            self.image_list.addItem(item_text)
-            
-            # Set as current image
-            self.current_image_path = file_path
-            
-            # Emit signals
-            self.image_loaded.emit(file_path)
-            self.images_updated.emit(self.image_files.copy())
+                                      "All selected files are already in the list.")
 
     def remove_image(self):
         """Remove selected image from list"""
@@ -190,6 +201,14 @@ class ValuesTab(QWidget):
         elif self.image_files:
             return self.image_files[0]  # Return first image if none selected
         return None
+    
+    def on_image_selection_changed(self):
+        """Handle when user selects a different image from the list"""
+        current_row = self.image_list.currentRow()
+        if current_row >= 0 and current_row < len(self.image_files):
+            selected_image = self.image_files[current_row]
+            # Notify parent to display this image in viewer
+            self.image_loaded.emit(selected_image)
 
     def setup_parameter_groups(self):
         """Setup the parameter groups for the 3 analysis types"""
@@ -205,10 +224,10 @@ class ValuesTab(QWidget):
         std_layout.addRow("Box Size (px):", self.std_box_size)
         std_layout.addRow("Bin Shift (px):", self.std_bin_shift)
         
-        # Add preview button
-        self.std_preview_btn = QPushButton("Preview Box Grid")
-        self.std_preview_btn.clicked.connect(lambda: self.preview_boxes("standard"))
-        std_layout.addRow(self.std_preview_btn)
+        # Add preview checkbox
+        self.std_preview_check = QCheckBox("Show Box Grid Preview")
+        self.std_preview_check.stateChanged.connect(lambda: self.preview_boxes("standard"))
+        std_layout.addRow(self.std_preview_check)
         
         self.standard_params.setLayout(std_layout)
 
@@ -232,10 +251,10 @@ class ValuesTab(QWidget):
         roll_layout.addRow("Subframe Size:", self.roll_sub_size)
         roll_layout.addRow("Subframe Shift:", self.roll_sub_shift)
         
-        # Add preview button
-        self.roll_preview_btn = QPushButton("Preview Box Grid")
-        self.roll_preview_btn.clicked.connect(lambda: self.preview_boxes("rolling"))
-        roll_layout.addRow(self.roll_preview_btn)
+        # Add preview checkbox
+        self.roll_preview_check = QCheckBox("Show Box Grid Preview")
+        self.roll_preview_check.stateChanged.connect(lambda: self.preview_boxes("rolling"))
+        roll_layout.addRow(self.roll_preview_check)
         
         self.rolling_params.setLayout(roll_layout)
 
@@ -253,10 +272,10 @@ class ValuesTab(QWidget):
         kymo_layout.addRow("Bin Shift (px):", self.kymo_bin_shift)
         kymo_layout.addRow(self.calc_speed)
         
-        # Add preview button
-        self.kymo_preview_btn = QPushButton("Preview Line Grid")
-        self.kymo_preview_btn.clicked.connect(lambda: self.preview_boxes("kymograph"))
-        kymo_layout.addRow(self.kymo_preview_btn)
+        # Add preview checkbox
+        self.kymo_preview_check = QCheckBox("Show Line Grid Preview")
+        self.kymo_preview_check.stateChanged.connect(lambda: self.preview_boxes("kymograph"))
+        kymo_layout.addRow(self.kymo_preview_check)
         
         self.kymo_params.setLayout(kymo_layout)
 
@@ -442,31 +461,94 @@ class ValuesTab(QWidget):
         from qtpy.QtWidgets import QMessageBox
         import numpy as np
         
-        # Check if an image is loaded
-        if not self.current_image_path:
-            QMessageBox.warning(self, "No Image", "Please load an image first.")
+        # Determine which checkbox triggered this
+        if analysis_type == "standard":
+            is_checked = self.std_preview_check.isChecked()
+        elif analysis_type == "rolling":
+            is_checked = self.roll_preview_check.isChecked()
+        elif analysis_type == "kymograph":
+            is_checked = self.kymo_preview_check.isChecked()
+        else:
             return
         
         # Check if parent has viewer
         if not hasattr(self.parent, 'viewer'):
+            # Uncheck the box if viewer not available
+            if analysis_type == "standard":
+                self.std_preview_check.setChecked(False)
+            elif analysis_type == "rolling":
+                self.roll_preview_check.setChecked(False)
+            elif analysis_type == "kymograph":
+                self.kymo_preview_check.setChecked(False)
             QMessageBox.warning(self, "No Viewer", "Napari viewer not available.")
             return
         
         viewer = self.parent.viewer
         
+        # Remove existing preview layer if it exists
+        for layer in list(viewer.layers):
+            if layer.name == "Box Grid Preview":
+                viewer.layers.remove(layer)
+        
+        # If unchecked, just remove the layer and return
+        if not is_checked:
+            return
+        
+        # Check if an image is loaded
+        if not self.current_image_path:
+            # Uncheck the box
+            if analysis_type == "standard":
+                self.std_preview_check.setChecked(False)
+            elif analysis_type == "rolling":
+                self.roll_preview_check.setChecked(False)
+            elif analysis_type == "kymograph":
+                self.kymo_preview_check.setChecked(False)
+            QMessageBox.warning(self, "No Image", "Please load an image first.")
+            return
+        
         # Check if image is in viewer
         if len(viewer.layers) == 0:
+            # Uncheck the box
+            if analysis_type == "standard":
+                self.std_preview_check.setChecked(False)
+            elif analysis_type == "rolling":
+                self.roll_preview_check.setChecked(False)
+            elif analysis_type == "kymograph":
+                self.kymo_preview_check.setChecked(False)
             QMessageBox.warning(self, "No Image", "No image is displayed in the viewer.")
             return
         
-        # Get the current image layer
-        image_layer = viewer.layers[0]  # Assume first layer is the image
+        # Get the current image layer - find the actual Image layer, not shapes
+        image_layer = None
+        for layer in viewer.layers:
+            if hasattr(layer, 'data') and layer.__class__.__name__ == 'Image':
+                image_layer = layer
+                break
+        
+        if image_layer is None:
+            # Uncheck the box
+            if analysis_type == "standard":
+                self.std_preview_check.setChecked(False)
+            elif analysis_type == "rolling":
+                self.roll_preview_check.setChecked(False)
+            elif analysis_type == "kymograph":
+                self.kymo_preview_check.setChecked(False)
+            QMessageBox.warning(self, "No Image", "No image layer found in viewer.")
+            return
+        
         image_shape = image_layer.data.shape
         
         # Get dimensions (handle both 2D and 3D/4D images)
         if len(image_shape) >= 2:
             height, width = image_shape[-2:]
         else:
+            # Uncheck the box
+            if analysis_type == "standard":
+                self.std_preview_check.setChecked(False)
+            elif analysis_type == "rolling":
+                self.roll_preview_check.setChecked(False)
+            elif analysis_type == "kymograph":
+                self.kymo_preview_check.setChecked(False)
             QMessageBox.warning(self, "Invalid Image", "Image dimensions not supported.")
             return
         
@@ -485,11 +567,6 @@ class ValuesTab(QWidget):
             grid_type = "lines"
         else:
             return
-        
-        # Remove existing preview layer if it exists
-        for layer in viewer.layers:
-            if layer.name == "Box Grid Preview":
-                viewer.layers.remove(layer)
         
         # Calculate grid positions
         ind = box_size // 2
@@ -522,17 +599,6 @@ class ValuesTab(QWidget):
                 name='Box Grid Preview'
             )
             
-            # Show info
-            num_boxes = len(shapes_data)
-            QMessageBox.information(
-                self, 
-                "Grid Preview", 
-                f"Preview created with {num_boxes} boxes\n"
-                f"Box size: {box_size}px\n"
-                f"Step: {step}px\n"
-                f"Grid dimensions: {len(x_positions)} x {len(y_positions)}"
-            )
-            
         elif grid_type == "lines":
             # Create vertical line grid for kymograph
             x_positions = list(range(0, width, step))
@@ -554,14 +620,4 @@ class ValuesTab(QWidget):
                 edge_color='cyan',
                 edge_width=box_size,  # Line width
                 name='Box Grid Preview'
-            )
-            
-            # Show info
-            num_lines = len(shapes_data)
-            QMessageBox.information(
-                self, 
-                "Grid Preview", 
-                f"Preview created with {num_lines} vertical lines\n"
-                f"Line width: {box_size}px\n"
-                f"Step: {step}px"
             )
