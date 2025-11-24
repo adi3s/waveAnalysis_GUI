@@ -13,7 +13,7 @@ from waveanalysis.data_workflows import combined_workflow, rolling_workflow
 from waveanalysis.signal_processing import correlation_functions, peak_properties, wave_speed
 
 class WaveAnalysisWidget(QWidget):
-    """Main widget for wave analysis GUI, integrating all tabs and handling workflow."""
+    """Main widget for wave analysis GUI, integrating all tabs and handling workflow"""
     def __init__(self, viewer):
         super().__init__()
         self.viewer = viewer
@@ -23,8 +23,43 @@ class WaveAnalysisWidget(QWidget):
         self.results = None
         self.log_params = self._initialize_log_params()
         
+        # Install event filter to catch napari errors
+        self._install_napari_error_handler()
+        
         self._init_ui()
         self._connect_signals()
+    
+    def _install_napari_error_handler(self):
+        """Install error handler to suppress harmless napari internal errors."""
+        import sys
+        import warnings
+        
+        # Suppress specific napari warnings
+        warnings.filterwarnings('ignore', category=RuntimeWarning, module='napari')
+        
+        # Store original excepthook
+        self._original_excepthook = sys.excepthook
+        
+        def custom_excepthook(exc_type, exc_value, exc_traceback):
+            """Custom exception handler to suppress certain napari errors."""
+            # Check if it's the shapes layer index error we want to suppress
+            if exc_type == IndexError:
+                error_str = str(exc_value)
+                if 'list index out of range' in error_str:
+                    # Check if it's from napari shapes layer
+                    if exc_traceback:
+                        frame = exc_traceback.tb_frame
+                        while frame:
+                            if 'napari' in str(frame.f_code.co_filename) and 'shapes' in str(frame.f_code.co_filename):
+                                # Suppress this error - it's a harmless napari internal issue
+                                print("Suppressed harmless napari shapes layer error")
+                                return
+                            frame = frame.f_back if hasattr(frame, 'f_back') else None
+            
+            # For all other errors, use the original handler
+            self._original_excepthook(exc_type, exc_value, exc_traceback)
+        
+        sys.excepthook = custom_excepthook
 
     def _initialize_log_params(self):
         """Initialize logging parameters dictionary."""

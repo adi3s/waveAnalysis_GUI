@@ -112,7 +112,8 @@ class PostProcessingTab(QWidget):
             "Summary",
             "ACF Plots",
             "CCF Plots", 
-            "Peak Properties"
+            "Peak Properties",
+            "ROI Statistics"
         ])
         self.display_combo.currentIndexChanged.connect(self.on_display_type_changed)
         display_box.addWidget(self.display_combo)
@@ -122,6 +123,17 @@ class PostProcessingTab(QWidget):
         self.show_individual.stateChanged.connect(self.on_show_individual_changed)
         self.show_individual.setVisible(False)  # Only show for plot types that support it
         display_box.addWidget(self.show_individual)
+        
+        # Add statistic selector for ROI Statistics view
+        stat_selector_label = QLabel("Statistic:")
+        display_box.addWidget(stat_selector_label)
+        self.stat_selector = QComboBox()
+        self.stat_selector.addItems(["Mean", "Median", "StdDev", "SEM"])
+        self.stat_selector.currentIndexChanged.connect(self.on_stat_selector_changed)
+        self.stat_selector.setVisible(False)  # Only show for ROI Statistics view
+        display_box.addWidget(self.stat_selector)
+        stat_selector_label.setVisible(False)
+        self.stat_selector_label = stat_selector_label
 
         # Display type dropdown
         display_type_label = QLabel("Plot Type:")
@@ -179,7 +191,8 @@ class PostProcessingTab(QWidget):
                 "ACF Plots": "Period Plots",
                 "CCF Plots": "Shift Plots",
                 "Peak Properties": "Peak Properties",
-                "Summary": "Summary"
+                "Summary": "Summary",
+                "ROI Statistics": "ROI Statistics"
             }
             new_selection = mapping.get(current_selection, "Summary")
         else:
@@ -197,9 +210,13 @@ class PostProcessingTab(QWidget):
                 "Period Plots": "ACF Plots",
                 "Shift Plots": "CCF Plots",
                 "Peak Properties": "Peak Properties",
-                "Summary": "Summary"
+                "Summary": "Summary",
+                "ROI Statistics": "ROI Statistics"
             }
             new_selection = mapping.get(current_selection, "Summary")
+        
+        # Always add ROI Statistics option
+        self.display_combo.addItem("ROI Statistics")
         
         # Restore selection if possible
         index = self.display_combo.findText(new_selection)
@@ -291,6 +308,9 @@ class PostProcessingTab(QWidget):
         if self.plot_preferences.get("plot_summary_peaks", True):
             self.display_combo.addItem("Peak Properties")
         
+        # Always add ROI Statistics ( doesn't depend on plot preferences)
+        self.display_combo.addItem("ROI Statistics")
+        
         # Try to restore previous selection if still available
         index = self.display_combo.findText(current_selection)
         if index >= 0:
@@ -325,6 +345,14 @@ class PostProcessingTab(QWidget):
         
         # Clear the stored canvas references
         self.canvases.clear()
+        
+        # Get display type
+        display_type = self.display_combo.currentText()
+        
+        # Handle ROI Statistics display separately
+        if display_type == "ROI Statistics":
+            self.show_roi_statistics()
+            return
         
         # Create a grid layout for organized display of ROI plots
         grid_widget = QWidget()
@@ -796,6 +824,11 @@ class PostProcessingTab(QWidget):
             "Period Plots", "Shift Plots"  # Rolling
         ])
         
+        # Show/hide statistic selector for ROI Statistics view
+        is_roi_stats = display_type == "ROI Statistics"
+        self.stat_selector.setVisible(is_roi_stats)
+        self.stat_selector_label.setVisible(is_roi_stats)
+        
         if self.results_dir and os.path.exists(self.results_dir):
             self.show_results()
                 
@@ -803,6 +836,232 @@ class PostProcessingTab(QWidget):
         """Handle changes in the individual plots checkbox."""
         if self.results_dir and os.path.exists(self.results_dir):
             self.show_results()  # This will update the display based on current selection
+    
+    def on_stat_selector_changed(self, index):
+        """Handle changes in the statistic selector."""
+        if self.results_dir and os.path.exists(self.results_dir):
+            self.show_results()
+    
+    def extract_roi_statistics_from_csvs(self):
+        """Extract statistics for each ROI from summary CSV files.
+        
+        Returns:
+            pd.DataFrame: DataFrame with columns ['ROI_ID', 'Image_Name', 'Parameter', 'Statistic', 'Value']
+        """
+        if not self.results_dir or not os.path.exists(self.results_dir):
+            return None
+        
+        all_roi_data = []
+        
+        # Find all summary CSV files
+        for root, dirs, files in os.walk(self.results_dir):
+            for f in files:
+                if f.endswith('.csv') and ('summary' in f.lower() or 'ROI_' in root):
+                    csv_path = os.path.join(root, f)
+                    
+                    # Determine ROI ID and Image name from path
+                    path_parts = root.split(os.sep)
+                    roi_id = None
+                    image_name = None
+                    
+                    # Look for ROI directory
+                    for part in path_parts:
+                        if part.startswith("ROI_"):
+                            roi_id = part
+                        elif part not in ['0_signalProcessing', 'Whole_Image'] and not part.startswith('ROI_'):
+                            # Try to match with loaded image names
+                            for loaded_name in self.loaded_image_names:
+                                if loaded_name in part:
+                                    image_name = loaded_name
+                                    break
+                    
+                    # If no ROI found, check if it's whole image
+                    if not roi_id and 'Whole_Image' in root:
+                        roi_id = 'Whole_Image'
+                    
+                    if not roi_id:
+                        continue  # Skip if we can't determine ROI
+                    
+                    # Read CSV and extract statistics
+                    try:
+                        df = pd.read_csv(csv_path)
+                        
+                        # Check if this is a standard summary format
+                        if 'Parameter' in df.columns:
+                            # Standard format has columns: Parameter, Mean, Median, StdDev, SEM, Bin 0, Bin 1, ...
+                            for idx, row in df.iterrows():
+                                parameter = row['Parameter']
+                                for stat in ['Mean', 'Median', 'StdDev', 'SEM']:
+                                    if stat in df.columns:
+                                        all_roi_data.append({
+                                            'ROI_ID': roi_id,
+                                            'Image_Name': image_name,
+                                            'Parameter': parameter,
+                                            'Statistic': stat,
+                                            'Value': row[stat]
+                                        })
+                        elif 'Submovie' in df.columns:
+                            # Rolling analysis format
+                            # Extract all columns that contain statistics
+                            for idx, row in df.iterrows():
+                                for col in df.columns:
+                                    if col == 'Submovie':
+                                        continue
+                                    # Parse column name to extract parameter and statistic
+                                    # Format: "Ch X Mean Period", "Ch1-Ch2 Mean Shift", etc.
+                                    if any(stat in col for stat in ['Mean', 'Median', 'StdDev', 'Pcnt']):
+                                        for stat in ['Mean', 'Median', 'StdDev']:
+                                            if stat in col:
+                                                parameter = col.replace(f' {stat}', '').strip()
+                                                all_roi_data.append({
+                                                    'ROI_ID': roi_id,
+                                                    'Image_Name': image_name,
+                                                    'Parameter': parameter,
+                                                    'Statistic': stat,
+                                                    'Value': row[col]
+                                                })
+                                                break
+                    except Exception as e:
+                        print(f"Error reading CSV {csv_path}: {e}")
+                        continue
+        
+        if not all_roi_data:
+            return None
+        
+        return pd.DataFrame(all_roi_data)
+    
+    def generate_roi_comparison_plots(self, selected_statistic='Mean'):
+        """Generate comparison plots for ROIs across different parameters.
+        
+        Args:
+            selected_statistic (str): The statistic to plot (Mean, Median, StdDev, or SEM)
+        
+        Returns:
+            dict: Dictionary of matplotlib figures, keyed by parameter name
+        """
+        roi_stats_df = self.extract_roi_statistics_from_csvs()
+        
+        if roi_stats_df is None or roi_stats_df.empty:
+            return {}
+        
+        # Filter by selected statistic
+        filtered_df = roi_stats_df[roi_stats_df['Statistic'] == selected_statistic].copy()
+        
+        if filtered_df.empty:
+            return {}
+        
+        # Get unique parameters
+        parameters = filtered_df['Parameter'].unique()
+        
+        figures = {}
+        
+        # Generate a plot for each parameter
+        for param in parameters:
+            param_df = filtered_df[filtered_df['Parameter'] == param].copy()
+            
+            # Skip if we don't have enough data
+            if len(param_df) < 2:
+                continue
+            
+            try:
+                # Import plotting libraries
+                import seaborn as sns
+                import matplotlib.pyplot as plt
+                
+                fig, ax = plt.subplots(figsize=(8, 6))
+                
+                # Create boxplot
+                sns.boxplot(x='ROI_ID', 
+                           y='Value', 
+                           data=param_df,
+                           showfliers=False,
+                           ax=ax)
+                
+                # Create swarmplot on top
+                sns.swarmplot(x='ROI_ID', 
+                             y='Value', 
+                             data=param_df,
+                             color=".25",
+                             ax=ax)
+                
+                ax.set_xlabel('ROI', fontsize=12, weight='bold')
+                ax.set_ylabel(f'{selected_statistic} Value', fontsize=12, weight='bold')
+                ax.set_title(f'{param} - {selected_statistic} Comparison', fontsize=14, weight='bold')
+                ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
+                
+                # Adjust layout
+                plt.tight_layout()
+                
+                figures[param] = fig
+                
+            except Exception as e:
+                print(f"Error generating plot for {param}: {e}")
+                continue
+        
+        return figures
+    
+    def show_roi_statistics(self):
+        """Display ROI statistics comparison plots."""
+        selected_statistic = self.stat_selector.currentText()
+        
+        # Generate comparison plots
+        comparison_plots = self.generate_roi_comparison_plots(selected_statistic)
+        
+        if not comparison_plots:
+            self.status_label.setText("No ROI statistics available for comparison.")
+            
+            # Display a helpful message
+            container = QWidget()
+            container_layout = QVBoxLayout()
+            
+            message = QLabel("No ROI statistics found.\n\nMake sure you have analyzed multiple ROIs.")
+            message.setAlignment(Qt.AlignCenter)
+            message.setStyleSheet("color: gray; font-size: 12px; padding: 20px;")
+            container_layout.addWidget(message)
+            container.setLayout(container_layout)
+            self.results_layout.addWidget(container)
+            return
+        
+        # Create a grid layout for organized display
+        grid_widget = QWidget()
+        grid_layout = QGridLayout()
+        grid_widget.setLayout(grid_layout)
+        self.results_layout.addWidget(grid_widget)
+        
+        # Display plots in a grid (2 columns)
+        row = 0
+        col = 0
+        max_cols = 2
+        
+        for param_name, fig in comparison_plots.items():
+            # Create container and canvas
+            container = QWidget()
+            container_layout = QVBoxLayout()
+            container_layout.setContentsMargins(5, 5, 5, 5)
+            container.setLayout(container_layout)
+            
+            # Create canvas from existing figure
+            canvas = FigureCanvas(fig)
+            canvas.setMinimumWidth(400)
+            canvas.setMinimumHeight(350)
+            self.canvases.append(canvas)
+            
+            container_layout.addWidget(canvas)
+            grid_layout.addWidget(container, row, col)
+            
+            canvas.draw()
+            
+            # Update grid position
+            col += 1
+            if col >= max_cols:
+                col = 0
+                row += 1
+        
+        # Update status message
+        self.status_label.setText(f"Displaying {len(comparison_plots)} ROI comparison plots for {selected_statistic}.")
+        
+        # Add a stretch at the end
+        self.results_layout.addStretch()
     
     def export_plots(self):
         """Export plots based on selected options."""
