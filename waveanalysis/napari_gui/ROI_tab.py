@@ -95,13 +95,31 @@ class ROITab(QWidget):
         button_row.addWidget(self.refresh_rois_btn)
         roi_ops_layout.addLayout(button_row)
         
+        # Add snapshot button
+        snapshot_row = QHBoxLayout()
+        self.save_snapshot_btn = QPushButton("Save ROI Snapshot (PNG)")
+        self.save_snapshot_btn.clicked.connect(self.save_roi_snapshot)
+        self.save_snapshot_btn.setEnabled(False)
+        self.save_snapshot_btn.setToolTip("Save a PNG image showing ROIs with labels")
+        snapshot_row.addWidget(self.save_snapshot_btn)
+        roi_ops_layout.addLayout(snapshot_row)
+        
+        # Add crop button
+        crop_row = QHBoxLayout()
+        self.save_crops_btn = QPushButton("Save ROI Crops (TIF)")
+        self.save_crops_btn.clicked.connect(self.save_roi_crops)
+        self.save_crops_btn.setEnabled(False)
+        self.save_crops_btn.setToolTip("Save cropped TIF files for each ROI with all dimensions")
+        crop_row.addWidget(self.save_crops_btn)
+        roi_ops_layout.addLayout(crop_row)
+        
         checkbox_row = QHBoxLayout()
         self.auto_save_check = QCheckBox("Auto-save ROIs")
-        self.auto_save_check.setChecked(True)
+        self.auto_save_check.setChecked(False)
         self.auto_save_check.setEnabled(False)
         
         self.show_labels_check = QCheckBox("Show ROI Labels")
-        self.show_labels_check.setChecked(True)
+        self.show_labels_check.setChecked(False)
         self.show_labels_check.setEnabled(False)
         self.show_labels_check.stateChanged.connect(self.toggle_roi_labels)
         
@@ -210,8 +228,8 @@ class ROITab(QWidget):
         """Handle changes to shapes layer data."""
         try:
             QTimer.singleShot(100, self.delayed_roi_check)
-            if self.show_labels_check.isChecked():
-                QTimer.singleShot(110, self.update_roi_labels)
+            # Always update labels when shapes change to ensure proper naming
+            QTimer.singleShot(110, self.update_roi_labels)
         except Exception:
             pass
 
@@ -335,6 +353,233 @@ class ROITab(QWidget):
         except Exception as e:
             if not auto:
                 QMessageBox.critical(self, "Error", f"Failed to save ROIs: {str(e)}")
+    
+    def save_roi_snapshot(self):
+        """Save a PNG snapshot of the current image frame with ROIs and labels."""
+        if not self.current_image_path:
+            QMessageBox.warning(self, "No Image", "No image loaded.")
+            return
+        
+        if not self.roi_manager_initialized:
+            QMessageBox.warning(self, "ROI Manager Not Ready", "Please initialize ROI Manager first.")
+            return
+        
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib.patches as patches
+            from matplotlib.figure import Figure
+            
+            # Get the image layer
+            image_layer = self._get_image_layer()
+            if image_layer is None:
+                QMessageBox.warning(self, "No Image", "No image found in viewer.")
+                return
+            
+            # Get image data (first frame if it's a stack)
+            image_data = image_layer.data
+            
+            # Handle different dimensionalities - extract first slice from each dimension until we get 2D
+            frame_data = image_data
+            while frame_data.ndim > 2:
+                frame_data = frame_data[0]
+            
+            if frame_data.ndim != 2:
+                QMessageBox.warning(self, "Invalid Image", 
+                                  f"Could not extract 2D frame from image with shape {image_data.shape}")
+                return
+            
+            # Get ROI layer
+            roi_layer = self._find_roi_layer()
+            if roi_layer is None or len(roi_layer.data) == 0:
+                reply = QMessageBox.question(
+                    self, "No ROIs", 
+                    "No ROIs found. Save image without ROIs?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+                )
+                if reply == QMessageBox.No:
+                    return
+            
+            # Create figure
+            fig, ax = plt.subplots(figsize=(10, 10))
+            
+            # Display image
+            ax.imshow(frame_data, cmap='gray')
+            ax.axis('off')
+            
+            # Add ROIs if they exist
+            if roi_layer is not None and len(roi_layer.data) > 0:
+                image_name = ""
+                if self.current_image_path:
+                    image_name = os.path.splitext(os.path.basename(self.current_image_path))[0] + "_"
+                
+                for i, roi_shape in enumerate(roi_layer.data):
+                    # Extract rectangle coordinates
+                    try:
+                        vertices = np.asarray(roi_shape)
+                        
+                        # Get min/max coordinates
+                        y_coords = vertices[:, 0]
+                        x_coords = vertices[:, 1]
+                        
+                        y_min = np.min(y_coords)
+                        y_max = np.max(y_coords)
+                        x_min = np.min(x_coords)
+                        x_max = np.max(x_coords)
+                        
+                        width = x_max - x_min
+                        height = y_max - y_min
+                        
+                        # Create rectangle patch
+                        rect = patches.Rectangle(
+                            (x_min, y_min), width, height,
+                            linewidth=2, edgecolor='red', facecolor='none'
+                        )
+                        ax.add_patch(rect)
+                        
+                        # Add label above the ROI box
+                        label = f"{image_name}ROI{i+1}"
+                        ax.text(
+                            x_min, y_min - 5, label,
+                            color='white', fontsize=12, fontweight='bold',
+                            ha='left', va='bottom',
+                            bbox=dict(boxstyle='round,pad=0.3', facecolor='black', alpha=0.7)
+                        )
+                    except Exception as e:
+                        print(f"Warning: Could not draw ROI {i+1}: {e}")
+                        continue
+            
+            # Save to file
+            roi_dir = os.path.join(os.path.dirname(self.current_image_path), 'ROI_management')
+            os.makedirs(roi_dir, exist_ok=True)
+            
+            image_name = os.path.splitext(os.path.basename(self.current_image_path))[0]
+            snapshot_file = os.path.join(roi_dir, f"{image_name}_ROI_snapshot.png")
+            
+            fig.savefig(snapshot_file, dpi=150, bbox_inches='tight', pad_inches=0.1)
+            plt.close(fig)
+            
+            QMessageBox.information(
+                self, "Success", 
+                f"ROI snapshot saved to:\n{snapshot_file}"
+            )
+            
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"Error saving ROI snapshot:\n{error_details}")
+            QMessageBox.critical(self, "Error", f"Failed to save snapshot:\n{str(e)}")
+    
+    def save_roi_crops(self):
+        """Save cropped TIF files for each ROI with all dimensions preserved."""
+        if not self.current_image_path:
+            QMessageBox.warning(self, "No Image", "No image loaded.")
+            return
+        
+        if not self.roi_manager_initialized:
+            QMessageBox.warning(self, "ROI Manager Not Ready", "Please initialize ROI Manager first.")
+            return
+        
+        try:
+            from tifffile import imwrite
+            
+            # Get the image layer
+            image_layer = self._get_image_layer()
+            if image_layer is None:
+                QMessageBox.warning(self, "No Image", "No image found in viewer.")
+                return
+            
+            # Get full image data (all dimensions)
+            image_data = image_layer.data
+            
+            # Get ROI layer
+            roi_layer = self._find_roi_layer()
+            if roi_layer is None or len(roi_layer.data) == 0:
+                QMessageBox.warning(self, "No ROIs", "No ROIs found to crop.")
+                return
+            
+            # Create cropped folder
+            roi_dir = os.path.join(os.path.dirname(self.current_image_path), 'ROI_management', 'cropped')
+            os.makedirs(roi_dir, exist_ok=True)
+            
+            image_name = os.path.splitext(os.path.basename(self.current_image_path))[0]
+            saved_count = 0
+            
+            # Process each ROI
+            for i, roi_shape in enumerate(roi_layer.data):
+                try:
+                    vertices = np.asarray(roi_shape)
+                    
+                    # Get y and x coordinates (last 2 dimensions)
+                    y_coords = vertices[:, 0]
+                    x_coords = vertices[:, 1]
+                    
+                    y_min = int(np.floor(np.min(y_coords)))
+                    y_max = int(np.ceil(np.max(y_coords)))
+                    x_min = int(np.floor(np.min(x_coords)))
+                    x_max = int(np.ceil(np.max(x_coords)))
+                    
+                    # Crop all dimensions, keeping time/channel/z intact
+                    if image_data.ndim == 5:  # e.g., (t, z, c, y, x)
+                        cropped = image_data[:, :, :, y_min:y_max, x_min:x_max]
+                        num_frames, num_slices, num_channels = cropped.shape[:3]
+                    elif image_data.ndim == 4:  # e.g., (t, c, y, x) or (t, z, y, x)
+                        cropped = image_data[:, :, y_min:y_max, x_min:x_max]
+                        # Assume (t, c, y, x) format
+                        num_frames, num_channels = cropped.shape[:2]
+                        num_slices = 1
+                    elif image_data.ndim == 3:  # e.g., (t, y, x) or (c, y, x)
+                        cropped = image_data[:, y_min:y_max, x_min:x_max]
+                        # Assume (t, y, x) format
+                        num_frames = cropped.shape[0]
+                        num_channels = 1
+                        num_slices = 1
+                    elif image_data.ndim == 2:  # (y, x)
+                        cropped = image_data[y_min:y_max, x_min:x_max]
+                        num_frames = 1
+                        num_channels = 1
+                        num_slices = 1
+                    else:
+                        print(f"Warning: Unsupported dimensions for ROI {i+1}")
+                        continue
+                    
+                    # Create ImageJ metadata
+                    metadata = {
+                        'axes': 'TZCYX' if image_data.ndim == 5 else 'TCYX' if image_data.ndim == 4 else 'TYX' if image_data.ndim == 3 else 'YX',
+                        'frames': num_frames,
+                        'slices': num_slices,
+                        'channels': num_channels
+                    }
+                    
+                    # Save as TIF with ImageJ metadata
+                    roi_filename = f"{image_name}_ROI{i+1}_crop.tif"
+                    roi_filepath = os.path.join(roi_dir, roi_filename)
+                    
+                    imwrite(roi_filepath, cropped, imagej=True, metadata=metadata)
+                    saved_count += 1
+                    
+                except Exception as e:
+                    print(f"Warning: Could not save crop for ROI {i+1}: {e}")
+                    continue
+            
+            if saved_count > 0:
+                QMessageBox.information(
+                    self, "Success", 
+                    f"Saved {saved_count} ROI crop(s) to:\n{roi_dir}"
+                )
+            else:
+                QMessageBox.warning(self, "No Crops Saved", "Could not save any ROI crops.")
+                
+        except ImportError:
+            QMessageBox.critical(
+                self, "Missing Library", 
+                "tifffile library is required to save TIF files.\n"
+                "Install it with: pip install tifffile"
+            )
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"Error saving ROI crops:\n{error_details}")
+            QMessageBox.critical(self, "Error", f"Failed to save crops:\n{str(e)}")
 
     def get_rois_data(self):
         """Get ROI data from the ROI manager."""
@@ -350,7 +595,7 @@ class ROITab(QWidget):
                         for i, shape in enumerate(layer.data):
                             try:
                                 roi_data.append({
-                                    'id': i,
+                                    'id': i + 1,  # Use 1-based indexing
                                     'type': 'rectangle',
                                     'vertices': shape.tolist() if hasattr(shape, 'tolist') else list(shape)
                                 })
@@ -388,7 +633,8 @@ class ROITab(QWidget):
                         roi_image = self._extract_roi_region(image_data, vertices)
                         
                         if roi_image is not None and roi_image.size > 0:
-                            roi_layer_name = f"ROI_{roi_id + 1}_{os.path.splitext(os.path.basename(self.current_image_path))[0]}"
+                            image_name = os.path.splitext(os.path.basename(self.current_image_path))[0]
+                            roi_layer_name = f"{image_name}_ROI{roi_id}"
                             self.viewer.add_image(roi_image, name=roi_layer_name, visible=False)
                         
                 except Exception:
@@ -438,14 +684,27 @@ class ROITab(QWidget):
             pass
     
     def update_roi_labels(self):
-        """Update ROI labels to show proper numbering."""
+        """Update ROI labels to show proper numbering with image name."""
         try:
             roi_layer = self._find_roi_layer()
             if not roi_layer or not hasattr(roi_layer, 'text'):
                 return
             
-            if self.show_labels_check.isChecked() and len(roi_layer.data) > 0:
-                roi_layer.text = self._get_text_properties()
+            if len(roi_layer.data) > 0:
+                image_name = ""
+                if self.current_image_path:
+                    image_name = os.path.splitext(os.path.basename(self.current_image_path))[0] + "_"
+                
+                # Create labels with 1-based numbering
+                labels = [f"{image_name}ROI{i+1}" for i in range(len(roi_layer.data))]
+                
+                roi_layer.text = {
+                    'string': labels,
+                    'size': 12,
+                    'color': 'white',
+                    'anchor': 'center',
+                    'translation': [0, 0]
+                }
                 roi_layer.refresh()
         except Exception:
             pass
@@ -483,11 +742,30 @@ class ROITab(QWidget):
         self.refresh_rois_btn.setEnabled(enabled)
         self.auto_save_check.setEnabled(enabled)
         self.show_labels_check.setEnabled(enabled)
+        self.save_snapshot_btn.setEnabled(enabled)
+        self.save_crops_btn.setEnabled(enabled)
     
     def _get_text_properties(self):
         """Get text properties for ROI labels."""
+        image_name = ""
+        if self.current_image_path:
+            image_name = os.path.splitext(os.path.basename(self.current_image_path))[0] + "_"
+        
+        # Create custom labels for each ROI with image name and 1-based numbering
+        roi_layer = self._find_roi_layer()
+        if roi_layer and hasattr(roi_layer, 'data'):
+            num_rois = len(roi_layer.data)
+            labels = [f"{image_name}ROI{i+1}" for i in range(num_rois)]
+            return {
+                'string': labels,
+                'size': 12,
+                'color': 'white',
+                'anchor': 'center',
+                'translation': [0, 0]
+            }
+        
         return {
-            'string': '{index}',
+            'string': f'{image_name}ROI{{index}}',
             'size': 12,
             'color': 'white',
             'anchor': 'center',
