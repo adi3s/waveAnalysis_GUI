@@ -94,10 +94,6 @@ class ValuesTab(QWidget):
         layout.addWidget(self.kymo_params)
         layout.addWidget(self.common_params)
         layout.addWidget(load_group)
-
-        save_params = QPushButton("Save Parameters")
-        save_params.clicked.connect(self.save_parameters)
-        layout.addWidget(save_params)
         
         # Add stretch to prevent excessive vertical expansion
         layout.addStretch()
@@ -364,9 +360,10 @@ class ValuesTab(QWidget):
             if not self.kymo_bin_shift.value():
                 errors.append("Bin shift is required for kymograph analysis")
 
+        # Only require group names if multiple images are loaded
         if analysis_type in ["standard", "kymograph"]:
-            if not self.group_names.text():
-                errors.append("At least one group name is required")
+            if len(self.image_files) > 1 and not self.group_names.text():
+                errors.append("Group names are required when analyzing multiple images")
 
         return errors
 
