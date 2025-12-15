@@ -92,6 +92,9 @@ def combined_workflow(
     # performance tracker
     start = timeit.default_timer()
 
+    # Initialize cache for individual plots (will be saved manually from post-process tab)
+    hf.indv_plots_cache = {}
+
     # create main save path
     now = datetime.datetime.now()
     main_save_path = os.path.join(folder_path, f"0_signalProcessing-{now.strftime('%Y%m%d%H%M')}")
@@ -149,7 +152,8 @@ def combined_workflow(
                 if analysis_type == 'standard':
                     image_array = tiff_to_np_array_multi_frame(image_path, roi=roi)
                     bin_values, num_bins, _, _ = create_multi_frame_bin_array(image = image_array, 
-                                                                                img_props = img_props_dict)
+                                                                                img_props = img_props_dict,
+                                                                                roi = roi)
                     
                     # np.save(f'/Users/domchom/Desktop/{file_name}_bin_values.npy', bin_values)
                                     
@@ -285,6 +289,8 @@ def combined_workflow(
                     log_params['Miscellaneous'] = f'CCF plots were not generated for {file_name} because the image only has one channel'
 
                 # plot the individual ACF figures for the file
+                # NOTE: Individual plots are generated but not automatically saved
+                # They can be manually exported from the post-process tab
                 if plot_indv_ACFs:
                     indv_acf_plots = pt.plot_indv_acf_workflow(
                         bin_values=bin_values,
@@ -292,11 +298,16 @@ def combined_workflow(
                         img_parameters_dict=img_parameters_dict,
                         img_props=img_props_dict
                     )
-                    indv_acf_path = os.path.join(im_save_path, 'Individual_ACF_plots')
-                    os.makedirs(indv_acf_path, exist_ok=True)
-                    hf.save_plots(indv_acf_plots, indv_acf_path)
+                    # Store plots for later manual export
+                    if not hasattr(hf, 'indv_plots_cache'):
+                        hf.indv_plots_cache = {}
+                    if name_wo_ext not in hf.indv_plots_cache:
+                        hf.indv_plots_cache[name_wo_ext] = {}
+                    hf.indv_plots_cache[name_wo_ext]['acf'] = (indv_acf_plots, im_save_path)
 
                 # plot the individual peak properties figures for the file
+                # NOTE: Individual plots are generated but not automatically saved
+                # They can be manually exported from the post-process tab
                 if plot_indv_peaks:        
                     indv_peak_figs = pt.plot_indv_peak_workflow(
                         bin_values=bin_values,
@@ -304,11 +315,16 @@ def combined_workflow(
                         indv_peak_props=indv_peak_props,
                         num_frames=img_props_dict['num_frames']
                     )
-                    indv_peak_path = os.path.join(im_save_path, 'Individual_peak_plots')
-                    os.makedirs(indv_peak_path, exist_ok=True)
-                    hf.save_plots(indv_peak_figs, indv_peak_path)
+                    # Store plots for later manual export
+                    if not hasattr(hf, 'indv_plots_cache'):
+                        hf.indv_plots_cache = {}
+                    if name_wo_ext not in hf.indv_plots_cache:
+                        hf.indv_plots_cache[name_wo_ext] = {}
+                    hf.indv_plots_cache[name_wo_ext]['peaks'] = (indv_peak_figs, im_save_path)
                     
                 # plot the individual CCF figures for the file
+                # NOTE: Individual plots are generated but not automatically saved
+                # They can be manually exported from the post-process tab
                 if plot_indv_CCFs and img_props_dict['num_channels'] > 1:
                     if img_props_dict['num_channels'] == 1:
                         log_params['Miscellaneous'] = f'CCF plots were not generated for {file_name} because the image only has one channel'
@@ -318,10 +334,13 @@ def combined_workflow(
                         img_parameters_dict=img_parameters_dict,
                         img_props=img_props_dict
                     )
-                    indv_ccf_plots_path = os.path.join(im_save_path, 'Individual_CCF_plots')
-                    os.makedirs(indv_ccf_plots_path, exist_ok=True)
-                    hf.save_plots(indv_ccf_plots, indv_ccf_plots_path)
-                    # save the individual CCF values for the file
+                    # Store plots for later manual export
+                    if not hasattr(hf, 'indv_plots_cache'):
+                        hf.indv_plots_cache = {}
+                    if name_wo_ext not in hf.indv_plots_cache:
+                        hf.indv_plots_cache[name_wo_ext] = {}
+                    hf.indv_plots_cache[name_wo_ext]['ccf'] = (indv_ccf_plots, im_save_path)
+                    # save the individual CCF values for the file (keep this as it's data, not plots)
                     indv_ccf_values = get_indv_CCF_values(
                         indv_ccfs=indv_ccfs,
                         bin_values=bin_values,
