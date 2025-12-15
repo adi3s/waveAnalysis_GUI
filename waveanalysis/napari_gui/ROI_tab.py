@@ -260,6 +260,9 @@ class ROITab(QWidget):
             else:
                 self.load_image_rois(image_path)
             self.update_roi_scope_label()
+            # Update ROI labels if they are currently being displayed
+            if self.show_labels_check.isChecked():
+                QTimer.singleShot(100, self.update_roi_labels)
     
     def set_loaded_images(self, image_list):
         """Set the list of all loaded images."""
@@ -306,6 +309,10 @@ class ROITab(QWidget):
             self.init_roi_btn.setEnabled(True)
         
         self.update_roi_scope_label()
+        
+        # Update ROI labels if they are currently being displayed
+        if self.show_labels_check.isChecked():
+            QTimer.singleShot(100, self.update_roi_labels)
 
     def save_rois(self, auto=False):
         """Save ROIs to a file."""
@@ -876,7 +883,17 @@ class ROITab(QWidget):
             if hasattr(roi_layer, '_moving_value'):
                 roi_layer._moving_value = (None, None)
             
-            roi_layer.data = shapes_data
+            # Only update if there are no existing ROIs, or if the loaded shapes_data is not empty
+            # This prevents replacing user-drawn ROIs when switching between images
+            if len(roi_layer.data) == 0 or shapes_data:
+                # If there are existing ROIs and we're loading new ones, preserve the existing ROIs
+                if len(roi_layer.data) > 0 and shapes_data:
+                    # Don't replace - keep existing ROIs
+                    pass
+                else:
+                    # No existing ROIs, so load the saved ones
+                    roi_layer.data = shapes_data
+            
             roi_layer.visible = True
             
             if roi_layer_index is not None and roi_layer_index < len(self.viewer.layers) - 1:
@@ -884,8 +901,9 @@ class ROITab(QWidget):
             
             self.viewer.layers.selection.active = roi_layer
             
-            if shapes_data:
-                self.status_label.setText(f"Status: Loaded {len(shapes_data)} ROIs for {image_name}")
+            num_rois = len(roi_layer.data)
+            if num_rois > 0:
+                self.status_label.setText(f"Status: {num_rois} ROI(s) present for {image_name}")
             else:
                 self.status_label.setText(f"Status: Ready to draw ROIs for {image_name}")
         except Exception:
