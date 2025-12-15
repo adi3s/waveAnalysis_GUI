@@ -115,6 +115,7 @@ class WaveAnalysisWidget(QWidget):
         """Connect tab signals to handlers."""
         self.values_tab.image_loaded.connect(self.handle_new_image)
         self.values_tab.images_updated.connect(self.handle_images_updated)
+        self.values_tab.analysis_type_changed.connect(self.pre_process_tab.set_analysis_type)
         self.roi_tab.roi_saved.connect(self.handle_new_roi)
         self.roi_tab.roi_updated.connect(self.process_roi)
         self.pre_process_tab.analyze.clicked.connect(self.run_analysis)
