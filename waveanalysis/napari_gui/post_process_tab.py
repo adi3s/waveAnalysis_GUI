@@ -25,11 +25,15 @@ class PostProcessingTab(QWidget):
         self.loaded_images = []  # Store list of loaded images
         self.loaded_image_names = []  # Store list of loaded image names
         self.canvases = []
+        self.cached_figures = []  # Store references to cached figures to prevent deletion
         # Store which summary plots were requested
         self.plot_preferences = {
             "plot_summary_acfs": True,
             "plot_summary_ccfs": True,
-            "plot_summary_peaks": True
+            "plot_summary_peaks": True,
+            "plot_indv_acfs": False,
+            "plot_indv_ccfs": False,
+            "plot_indv_peaks": False
         }
         # Store what type of analysis was performed
         self.analysis_scope = {
@@ -91,21 +95,24 @@ class PostProcessingTab(QWidget):
 
         # Export controls
         export_box = QVBoxLayout()
-        export_label = QLabel("Export Options:")
+        export_label = QLabel("Save Options:")
         export_label.setStyleSheet("font-weight: bold;")
         export_box.addWidget(export_label)
         
-        self.export_combo = QComboBox()
-        self.export_combo.addItems([
-            "All Plots",
-            "Summary Plots Only",
-            "Individual Plots Only"
-        ])
-        export_box.addWidget(self.export_combo)
+        # Button to save individual bin plots
+        self.save_indv_plots_btn = QPushButton("Save Individual Bin Plots")
+        self.save_indv_plots_btn.clicked.connect(self.save_individual_plots)
+        self.save_indv_plots_btn.setEnabled(False)
+        self.save_indv_plots_btn.setVisible(False)  # Hidden until user checks "Show Individual Plots"
+        self.save_indv_plots_btn.setToolTip("Export individual bin plots (ACF, CCF, Peak) to results directory on disk")
+        export_box.addWidget(self.save_indv_plots_btn)
         
-        export_btn = QPushButton("Export")
-        export_btn.clicked.connect(self.export_plots)
-        export_box.addWidget(export_btn)
+        # Add ROI bin grid preview checkbox
+        self.show_roi_grid_checkbox = QCheckBox("Show ROI Bin Grid")
+        self.show_roi_grid_checkbox.stateChanged.connect(self.on_show_roi_grid_changed)
+        self.show_roi_grid_checkbox.setToolTip("Display bin grid overlay for each ROI in napari viewer")
+        self.show_roi_grid_checkbox.setVisible(False)  # Only show when ROI data is available
+        export_box.addWidget(self.show_roi_grid_checkbox)
         
         self.display_combo = QComboBox()
         self.display_combo.addItems([
@@ -153,8 +160,16 @@ class PostProcessingTab(QWidget):
         if isinstance(results_dir, str) and os.path.isdir(results_dir):
             self.results_dir = results_dir
             self.update_display_options()
+            # Enable individual plots save button only if individual plots were requested
+            any_indv_plots = (
+                self.plot_preferences.get("plot_indv_acfs", False) or
+                self.plot_preferences.get("plot_indv_ccfs", False) or
+                self.plot_preferences.get("plot_indv_peaks", False)
+            )
+            self.save_indv_plots_btn.setEnabled(any_indv_plots)
         else:
             self.results_dir = None
+            self.save_indv_plots_btn.setEnabled(False)
     
     def is_rolling_analysis(self):
         """Detect if the current results are from rolling analysis by checking for summary_plots directory."""
@@ -263,13 +278,28 @@ class PostProcessingTab(QWidget):
             self.plot_preferences = {
                 "plot_summary_acfs": pre_params.get("plot_summary_acfs", True),
                 "plot_summary_ccfs": pre_params.get("plot_summary_ccfs", True),
-                "plot_summary_peaks": pre_params.get("plot_summary_peaks", True)
+                "plot_summary_peaks": pre_params.get("plot_summary_peaks", True),
+                "plot_indv_acfs": pre_params.get("plot_indv_acfs", False),
+                "plot_indv_ccfs": pre_params.get("plot_indv_ccfs", False),
+                "plot_indv_peaks": pre_params.get("plot_indv_peaks", False)
             }
             # Also capture what type of analysis was performed
             self.analysis_scope = {
                 "analyze_whole_image": pre_params.get("analyze_whole_image", False),
                 "analyze_roi_data": pre_params.get("analyze_roi_data", False)
             }
+            # Enable save button only if any individual plots were requested
+            any_indv_plots = (
+                self.plot_preferences.get("plot_indv_acfs", False) or
+                self.plot_preferences.get("plot_indv_ccfs", False) or
+                self.plot_preferences.get("plot_indv_peaks", False)
+            )
+            if hasattr(self, 'save_indv_plots_btn'):
+                self.save_indv_plots_btn.setEnabled(any_indv_plots and self.results_dir is not None)
+            
+            # Show ROI bin grid checkbox if ROI data was analyzed
+            if hasattr(self, 'show_roi_grid_checkbox'):
+                self.show_roi_grid_checkbox.setVisible(self.analysis_scope.get("analyze_roi_data", False))
         self.update_display_options_for_preferences()
 
     def update_display_options_for_preferences(self):
@@ -343,8 +373,9 @@ class PostProcessingTab(QWidget):
                 widget.setParent(None)
                 widget.deleteLater()
         
-        # Clear the stored canvas references
+        # Clear the stored canvas and figure references
         self.canvases.clear()
+        self.cached_figures.clear()
         
         # Get display type
         display_type = self.display_combo.currentText()
@@ -363,6 +394,11 @@ class PostProcessingTab(QWidget):
         # Get display type and files
         display_type = self.display_combo.currentText()
         file_paths = self.locate_processed_files(display_type)
+        
+        # Check if we have cached plots to display
+        if file_paths and isinstance(file_paths[0], tuple) and file_paths[0][0] == 'CACHED_PLOTS':
+            self.display_cached_plots(file_paths[0][1], display_type)
+            return
         
         if not file_paths:
             self.status_label.setText(f"No processed files found for {display_type}.")
@@ -624,12 +660,25 @@ class PostProcessingTab(QWidget):
             if keyword_info:
                 # Check if individual plots are requested
                 if hasattr(self, 'show_individual') and self.show_individual.isChecked():
-                    # Show only individual plots
+                    # Show individual plots from cache or from disk
                     indv_dir, indv_keyword = keyword_info["indv"]
+                    
+                    # First, try to get plots from cache (if they haven't been saved yet)
+                    import waveanalysis.housekeeping.housekeeping_functions as hf
+                    if hasattr(hf, 'indv_plots_cache') and hf.indv_plots_cache:
+                        # Return cached plots as a special marker
+                        # We'll handle these differently in show_results
+                        plot_type_key = {'ACF Plots': 'acf', 'CCF Plots': 'ccf', 'Peak Properties': 'peaks'}
+                        cache_key = plot_type_key.get(display_type)
+                        if cache_key:
+                            file_paths.append(('CACHED_PLOTS', cache_key))
+                    
+                    # Also check for saved plots on disk
                     for root, dirs, files in os.walk(self.results_dir):
-                        if os.path.basename(root) == indv_dir:
+                        dir_basename = os.path.basename(root)
+                        if dir_basename == indv_dir:
                             for f in files:
-                                if f.endswith(".png") and indv_keyword in f:
+                                if f.endswith(".png"):
                                     file_path = os.path.join(root, f)
                                     file_paths.append(file_path)
                 else:
@@ -834,8 +883,175 @@ class PostProcessingTab(QWidget):
                 
     def on_show_individual_changed(self, state):
         """Handle changes in the individual plots checkbox."""
+        # Show/hide save button based on checkbox state
+        is_checked = self.show_individual.isChecked()
+        self.save_indv_plots_btn.setVisible(is_checked)
+        
+        # Also check if we should enable it (only if individual plots were requested)
+        if is_checked:
+            any_indv_plots = (
+                self.plot_preferences.get("plot_indv_acfs", False) or
+                self.plot_preferences.get("plot_indv_ccfs", False) or
+                self.plot_preferences.get("plot_indv_peaks", False)
+            )
+            self.save_indv_plots_btn.setEnabled(any_indv_plots and self.results_dir is not None)
+        
         if self.results_dir and os.path.exists(self.results_dir):
             self.show_results()  # This will update the display based on current selection
+    
+    def on_show_roi_grid_changed(self, state):
+        """Handle changes in the ROI bin grid checkbox."""
+        if state == Qt.Checked:
+            self.display_roi_bin_grids()
+        else:
+            self.clear_roi_bin_grids()
+    
+    def clear_roi_bin_grids(self):
+        """Remove ROI bin grid layers from napari viewer."""
+        if not self.parent or not hasattr(self.parent, 'viewer'):
+            return
+        
+        viewer = self.parent.viewer
+        layers_to_remove = []
+        
+        for layer in viewer.layers:
+            if hasattr(layer, 'name') and 'ROI Bin Grid' in layer.name:
+                layers_to_remove.append(layer)
+        
+        for layer in layers_to_remove:
+            viewer.layers.remove(layer)
+    
+    def display_roi_bin_grids(self):
+        """Display bin grid overlays for each ROI in napari viewer."""
+        if not self.parent or not hasattr(self.parent, 'viewer'):
+            QMessageBox.warning(self, "No Viewer", "Napari viewer not available.")
+            return
+        
+        if not self.results_dir or not os.path.exists(self.results_dir):
+            QMessageBox.warning(self, "No Results", "No results directory available.")
+            return
+        
+        viewer = self.parent.viewer
+        
+        # Get analysis parameters from parent
+        if not hasattr(self.parent, 'values_tab'):
+            return
+        
+        params = self.parent.values_tab.get_params()
+        analysis_type = params.get('type', 'standard')
+        
+        # Get bin parameters based on analysis type
+        if analysis_type == 'standard':
+            box_size = params.get('box_size', 20)
+            step = params.get('bin_shift', 20)
+        elif analysis_type == 'rolling':
+            box_size = params.get('box_size', 20)
+            step = params.get('bin_shift', 20)
+        elif analysis_type == 'kymograph':
+            # Kymograph uses different parameters
+            QMessageBox.information(self, "Not Supported", 
+                                   "Bin grid display is not supported for kymograph analysis.")
+            self.show_roi_grid_checkbox.setChecked(False)
+            return
+        else:
+            return
+        
+        # Get ROI data for each image
+        if not hasattr(self.parent, 'roi_tab'):
+            return
+        
+        roi_tab = self.parent.roi_tab
+        
+        # Clear existing grid layers
+        self.clear_roi_bin_grids()
+        
+        # Get loaded images
+        loaded_images = params.get('loaded_images', [])
+        if not loaded_images:
+            QMessageBox.warning(self, "No Images", "No images were loaded for analysis.")
+            return
+        
+        # For each image, get its ROIs and display bin grids
+        ind = box_size // 2
+        grids_created = 0
+        
+        for image_path in loaded_images:
+            image_name = os.path.splitext(os.path.basename(image_path))[0]
+            rois = roi_tab.get_rois_for_image(image_path)
+            
+            if not rois or len(rois) == 0:
+                continue
+            
+            # For each ROI, create bin grid
+            for roi_idx, roi in enumerate(rois):
+                if not isinstance(roi, np.ndarray):
+                    roi = np.array(roi)
+                
+                # ROI comes from napari in (y, x) format
+                # Convert to (x, y) for processing
+                roi_xy = roi[:, [1, 0]] if roi.shape[1] == 2 else roi
+                
+                # Get ROI bounding box (in x, y format)
+                from matplotlib.path import Path
+                roi_x_min, roi_y_min = np.min(roi_xy, axis=0).astype(int)
+                roi_x_max, roi_y_max = np.max(roi_xy, axis=0).astype(int)
+                
+                # Constrain to valid region (considering box_size)
+                roi_x_min = max(ind, roi_x_min)
+                roi_x_max = roi_x_max
+                roi_y_min = max(ind, roi_y_min)
+                roi_y_max = roi_y_max
+                
+                # Generate bin centers within ROI bounds (in x, y format)
+                x_centers = list(range(roi_x_min, roi_x_max, step))
+                y_centers = list(range(roi_y_min, roi_y_max, step))
+                
+                if not x_centers or not y_centers:
+                    continue
+                
+                # Create meshgrid and filter by ROI polygon (in x, y format)
+                xx, yy = np.meshgrid(x_centers, y_centers)
+                bin_centers = np.column_stack([xx.ravel(), yy.ravel()])
+                
+                # Filter bins to only include those within ROI (using x, y coordinates)
+                roi_path = Path(roi_xy)
+                within_roi = roi_path.contains_points(bin_centers)
+                valid_bin_centers = bin_centers[within_roi]
+                
+                if len(valid_bin_centers) == 0:
+                    continue
+                
+                # Create box shapes for each valid bin center
+                shapes_data = []
+                for x, y in valid_bin_centers:
+                    # napari expects boxes in (row, col) = (y, x) format
+                    # Create box corners around center (x, y)
+                    box = np.array([
+                        [y - ind, x - ind],  # top-left (row, col)
+                        [y - ind, x + ind],  # top-right
+                        [y + ind, x + ind],  # bottom-right
+                        [y + ind, x - ind]   # bottom-left
+                    ])
+                    shapes_data.append(box)
+                
+                # Add shapes layer for this ROI
+                layer_name = f'ROI Bin Grid - {image_name} ROI {roi_idx + 1}'
+                viewer.add_shapes(
+                    shapes_data,
+                    shape_type='rectangle',
+                    edge_color='yellow',
+                    edge_width=1,
+                    face_color='transparent',
+                    name=layer_name
+                )
+                grids_created += 1
+        
+        if grids_created > 0:
+            self.status_label.setText(f"Displayed {grids_created} ROI bin grid(s)")
+        else:
+            QMessageBox.information(self, "No ROI Data", 
+                                   "No ROI data found. Make sure ROIs were created and analyzed.")
+            self.show_roi_grid_checkbox.setChecked(False)
     
     def on_stat_selector_changed(self, index):
         """Handle changes in the statistic selector."""
@@ -1063,50 +1279,147 @@ class PostProcessingTab(QWidget):
         # Add a stretch at the end
         self.results_layout.addStretch()
     
-    def export_plots(self):
-        """Export plots based on selected options."""
+
+    
+    def display_cached_plots(self, plot_type_key, display_type):
+        """Display individual plots from cache without saving to disk."""
+        import waveanalysis.housekeeping.housekeeping_functions as hf
+        
+        if not hasattr(hf, 'indv_plots_cache') or not hf.indv_plots_cache:
+            self.status_label.setText("No cached individual plots available.")
+            return
+        
+        # Create a grid layout
+        grid_widget = QWidget()
+        grid_layout = QGridLayout()
+        grid_widget.setLayout(grid_layout)
+        self.results_layout.addWidget(grid_widget)
+        
+        row = 0
+        col = 0
+        max_cols = 3
+        plot_count = 0
+        
+        # Store references to prevent garbage collection
+        self.cached_figures = []
+        
+        # Iterate through cached plots
+        for image_name, plot_types in hf.indv_plots_cache.items():
+            if plot_type_key in plot_types:
+                plots_dict, save_path = plot_types[plot_type_key]
+                
+                # Add label for this image
+                label = QLabel(f"{image_name} - {display_type}")
+                label.setStyleSheet(
+                    "font-weight: bold; font-size: 13px; "
+                    "padding: 6px; background-color: rgba(100, 100, 100, 0.2); "
+                    "border-left: 3px solid #888; border-radius: 2px;"
+                )
+                grid_layout.addWidget(label, row, 0, 1, max_cols)
+                row += 1
+                col = 0
+                
+                # Display each plot from the dictionary
+                for plot_name, fig in plots_dict.items():
+                    # Keep reference to original figure
+                    self.cached_figures.append(fig)
+                    
+                    # Create container and canvas
+                    container = QWidget()
+                    container_layout = QVBoxLayout()
+                    container_layout.setContentsMargins(5, 5, 5, 5)
+                    container.setLayout(container_layout)
+                    
+                    # Create canvas from figure
+                    canvas = FigureCanvas(fig)
+                    canvas.setMinimumWidth(300)
+                    canvas.setMinimumHeight(250)
+                    self.canvases.append(canvas)
+                    
+                    # Add title label
+                    title_label = QLabel(plot_name)
+                    title_label.setStyleSheet("font-size: 10px; color: #666;")
+                    title_label.setAlignment(Qt.AlignCenter)
+                    container_layout.addWidget(title_label)
+                    container_layout.addWidget(canvas)
+                    
+                    grid_layout.addWidget(container, row, col)
+                    
+                    canvas.draw()
+                    plot_count += 1
+                    
+                    col += 1
+                    if col >= max_cols:
+                        col = 0
+                        row += 1
+        
+        self.status_label.setText(f"Displaying {plot_count} individual bin plots from cache (not yet saved to disk).")
+        self.results_layout.addStretch()
+    
+    def save_individual_plots(self):
+        """Save individual bin plots to the results directory."""
         if not self.results_dir or not os.path.exists(self.results_dir):
             QMessageBox.warning(self, "Error", "No results directory available.")
             return
-
-        # Get target directory from user
-        target_dir = QFileDialog.getExistingDirectory(self, "Select Export Directory")
-        if not target_dir:
-            return  # User cancelled
-
-        # Create export directory
-        export_dir = os.path.join(target_dir, "wave_analysis_plots")
-        os.makedirs(export_dir, exist_ok=True)
-
+        
         try:
-            # Determine which plots to export based on selection
-            export_type = self.export_combo.currentText()
-
-            if export_type == "Summary Plots Only" or export_type == "All Plots":
-                # Export summary plots and data
-                for plot_type in ["Summary", "ACF Plots", "CCF Plots", "Peak Properties"]:
-                    files = self.locate_processed_files(plot_type)
-                    for src in files:
-                        if os.path.exists(src):
-                            dest = os.path.join(export_dir, os.path.basename(src))
-                            with open(src, 'rb') as fsrc, open(dest, 'wb') as fdst:
-                                fdst.write(fsrc.read())
-
-            if export_type == "Individual Plots Only" or export_type == "All Plots":
-                # Export individual plots
-                for plot_type in ["Individual ACF Plots", "Individual CCF Plots", "Individual Peak Plots"]:
-                    files = self.locate_processed_files(plot_type)
-                    if files:  # Only create subdir if files exist
-                        subdir = plot_type.replace(" ", "_")
-                        os.makedirs(os.path.join(export_dir, subdir), exist_ok=True)
-                        for src in files:
-                            if os.path.exists(src):
-                                dest = os.path.join(export_dir, subdir, os.path.basename(src))
-                                with open(src, 'rb') as fsrc, open(dest, 'wb') as fdst:
-                                    fdst.write(fsrc.read())
-
-            QMessageBox.information(self, "Export Complete", f"Plots have been exported to:\n{export_dir}")
-
+            # Import housekeeping functions to access the cached plots
+            import waveanalysis.housekeeping.housekeeping_functions as hf
+            
+            # Check if there are any cached plots
+            if not hasattr(hf, 'indv_plots_cache') or not hf.indv_plots_cache:
+                QMessageBox.warning(
+                    self, "No Individual Plots", 
+                    "No individual bin plots were generated during analysis.\n\n"
+                    "To generate individual plots, enable the checkboxes in Pre-Process tab:\n"
+                    "- Individual ACF plots\n"
+                    "- Individual CCF plots\n"
+                    "- Individual Peak plots"
+                )
+                return
+            
+            saved_count = 0
+            plot_types_saved = []
+            
+            # Iterate through cached plots and save them
+            for image_name, plot_types in hf.indv_plots_cache.items():
+                for plot_type, (plots, save_path) in plot_types.items():
+                    # Create subdirectory for this plot type
+                    if plot_type == 'acf':
+                        subdir = 'Individual_ACF_plots'
+                        plot_types_saved.append('ACF')
+                    elif plot_type == 'peaks':
+                        subdir = 'Individual_peak_plots'
+                        plot_types_saved.append('Peak')
+                    elif plot_type == 'ccf':
+                        subdir = 'Individual_CCF_plots'
+                        plot_types_saved.append('CCF')
+                    else:
+                        continue
+                    
+                    full_path = os.path.join(save_path, subdir)
+                    os.makedirs(full_path, exist_ok=True)
+                    
+                    # Save the plots
+                    hf.save_plots(plots, full_path)
+                    saved_count += len(plots)
+            
+            # Don't clear the cache - keep plots available for viewing in GUI
+            # hf.indv_plots_cache = {}
+            
+            # Show success message
+            unique_types = list(set(plot_types_saved))
+            types_str = ", ".join(unique_types)
+            QMessageBox.information(
+                self, "Save Complete", 
+                f"Saved {saved_count} individual bin plots ({types_str}) to disk at:\n{self.results_dir}\n\n"
+                f"Plots remain viewable in the GUI."
+            )
+            
+            # No need to update display - plots are already showing from cache
+                
         except Exception as e:
-            QMessageBox.critical(self, "Export Error", f"Failed to export plots:\n{str(e)}")
+            QMessageBox.critical(self, "Save Error", f"Failed to save individual plots:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
             return

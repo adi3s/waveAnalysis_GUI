@@ -17,6 +17,7 @@ class ValuesTab(QWidget):
     """
     image_loaded = Signal(str)  # Signal to notify when an image is loaded
     images_updated = Signal(list)  # Signal to notify when image list changes
+    analysis_type_changed = Signal(str)  # Signal to notify when analysis type changes
 
     def __init__(self, parent):
         """Initialize the ValuesTab with the parent widget"""
@@ -53,7 +54,7 @@ class ValuesTab(QWidget):
         # Analysis Type Selection
         self.analysis_combo = QComboBox()
         self.analysis_combo.addItems(["Standard", "Rolling", "Kymograph"])
-        self.analysis_combo.currentIndexChanged.connect(self.update_visible_params)
+        self.analysis_combo.currentIndexChanged.connect(self.on_analysis_type_changed)
 
         # Load Image Section with multiple image support
         load_group = QGroupBox("Image/Movie Controls")
@@ -205,6 +206,12 @@ class ValuesTab(QWidget):
             selected_image = self.image_files[current_row]
             # Notify parent to display this image in viewer
             self.image_loaded.emit(selected_image)
+    
+    def on_analysis_type_changed(self):
+        """Handle analysis type change"""
+        self.update_visible_params()
+        analysis_type = self.analysis_combo.currentText().lower()
+        self.analysis_type_changed.emit(analysis_type)
 
     def setup_parameter_groups(self):
         """Setup the parameter groups for the 3 analysis types"""
