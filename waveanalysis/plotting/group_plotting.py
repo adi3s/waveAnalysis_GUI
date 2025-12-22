@@ -19,12 +19,26 @@ def generate_group_comparison(
     print('Generating group comparisons...')
     group_mean_parameter_figs = {}
 
+    # Check if dataframe is empty or has insufficient data
+    if summary_df.empty or len(summary_df) < 2:
+        log_params['Plotting errors'].append('Insufficient data for group comparisons (need at least 2 data points)')
+        return group_mean_parameter_figs
+
     # get the parameters to compare
     parameters_to_compare = [column for column in summary_df.columns if 'Mean' in column]
 
     # generate and save figures for each parameter
     for param in parameters_to_compare:
         try:
+            # Check if parameter column exists and has valid data
+            if param not in summary_df.columns:
+                continue
+            
+            # Check if there's any non-NaN data in this parameter
+            if summary_df[param].isna().all():
+                log_params['Plotting errors'].append(f'No valid data for {param} (all NaN)')
+                continue
+                
             fig, ax = plt.subplots()
             # Create a boxplot
             sns.boxplot(x='Group Name', 
@@ -46,7 +60,7 @@ def generate_group_comparison(
             group_mean_parameter_figs[param] = fig
             plt.close(fig)
 
-        except ValueError:
-            log_params['Plotting errors'].append(f'No data to compare for {param}')
+        except (ValueError, KeyError) as e:
+            log_params['Plotting errors'].append(f'Error plotting {param}: {str(e)}')
 
     return group_mean_parameter_figs
