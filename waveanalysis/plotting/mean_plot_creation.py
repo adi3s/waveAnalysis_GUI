@@ -52,6 +52,16 @@ def return_mean_ACF_figure(
     signal_std = np.nanstd(signal, axis = 0)
     x_axis = np.arange(-num_frames + 1, num_frames) * frame_interval
 
+    # Check if all data is NaN - if so, return empty figure with warning
+    if np.all(np.isnan(signal_mean)) or np.all(np.isnan(periods)):
+        fig, ax = plt.subplots()
+        ax.text(0.5, 0.5, f'{channel}: Insufficient data for analysis\n(All values are NaN)', 
+                ha='center', va='center', fontsize=12)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.axis('off')
+        return fig
+
     # Create the figure with subplots
     fig, ax = plt.subplot_mosaic(mosaic = '''
                                             AA
@@ -135,15 +145,26 @@ def return_mean_prop_peaks_figure(
     '''
     Space saving function to return mean peak property figures
     '''
-    # Create subplots for histograms and boxplots
-    fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2)
-
     # Filter out NaN values from arrays
     min_array = [val for val in min_array if not np.isnan(val)]
     max_array = [val for val in max_array if not np.isnan(val)]
     amp_array = [val for val in amp_array if not np.isnan(val)]
     width_array = [val for val in width_array if not np.isnan(val)]
     offsets_array = [val for val in offsets_array if not np.isnan(val)]
+
+    # Check if all data is NaN - if so, return empty figure with warning
+    if (len(min_array) == 0 and len(max_array) == 0 and len(amp_array) == 0 and 
+        len(width_array) == 0 and len(offsets_array) == 0):
+        fig, ax = plt.subplots()
+        ax.text(0.5, 0.5, f'{Ch_name}: Insufficient data for peak analysis\\n(All values are NaN)', 
+                ha='center', va='center', fontsize=12)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.axis('off')
+        return fig
+
+    # Create subplots for histograms and boxplots
+    fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2)
 
     # Define plot parameters for histograms and boxplots
     plot_params = { 'amp' : (amp_array, 'tab:blue'),
@@ -245,6 +266,16 @@ def return_mean_CCF_figure(
     arr_mean = np.nanmean(signal, axis = 0)
     arr_std = np.nanstd(signal, axis = 0)
     x_axis = np.arange(-num_frames + 1, num_frames) * frame_interval
+
+    # Check if all data is NaN - if so, return empty figure with warning
+    if np.all(np.isnan(arr_mean)) or np.all(np.isnan(shifts)):
+        fig, ax = plt.subplots()
+        ax.text(0.5, 0.5, f'{channel_combo}: Insufficient data for CCF analysis\\n(All values are NaN)', 
+                ha='center', va='center', fontsize=12)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.axis('off')
+        return fig
 
     # Calculate mean and standard deviation of cross-correlation curves
     fig, ax = plt.subplot_mosaic(mosaic = '''
