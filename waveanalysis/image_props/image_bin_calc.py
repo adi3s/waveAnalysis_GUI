@@ -83,7 +83,9 @@ def create_multi_frame_bin_array(
     # Create a mask if ROI is provided
     if roi is not None:
         mask = np.zeros(image.shape[-2:], dtype=bool)
-        mask[roi[:, 1], roi[:, 0]] = True
+        # Convert ROI coordinates to integers for indexing
+        roi_int = roi.astype(np.int32)
+        mask[roi_int[:, 1], roi_int[:, 0]] = True
         # Expand mask to match image dimensions
         mask = np.broadcast_to(mask, (num_frames, num_channels) + mask.shape)
     else:

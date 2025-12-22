@@ -835,7 +835,8 @@ class ROITab(QWidget):
                 self.per_image_rois[image_path] = []
                 for roi_info in rois:
                     if 'vertices' in roi_info:
-                        vertices = np.array(roi_info['vertices'])
+                        # Convert to integers to avoid indexing errors
+                        vertices = np.array(roi_info['vertices'], dtype=np.float64)
                         self.per_image_rois[image_path].append(vertices)
                         shapes_data.append(vertices)
                 self.status_label.setText(f"Status: Loaded {len(rois)} ROIs for {image_name}")

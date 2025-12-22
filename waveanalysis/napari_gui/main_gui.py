@@ -220,7 +220,7 @@ class WaveAnalysisWidget(QWidget):
         self.crops = []
         for roi in rois:
             if not isinstance(roi, np.ndarray):
-                roi = np.array(roi)
+                roi = np.array(roi, dtype=np.float64)
             self.crops.append(roi)
 
     def get_active_rois(self, image_path=None):
@@ -453,6 +453,12 @@ class WaveAnalysisWidget(QWidget):
         """Process ROIs using rolling workflow."""
         results = []
         for i, roi in enumerate(active_rois):
+            # Ensure ROI is a float numpy array for consistency
+            if not isinstance(roi, np.ndarray):
+                roi = np.array(roi, dtype=np.float64)
+            else:
+                roi = roi.astype(np.float64)
+                
             roi_subdir = os.path.join(results_dir, f"ROI_{i+1}", image_name)
             os.makedirs(roi_subdir, exist_ok=True)
             
@@ -500,7 +506,10 @@ class WaveAnalysisWidget(QWidget):
         results = []
         for i, roi in enumerate(active_rois):
             if not isinstance(roi, np.ndarray):
-                roi = np.array(roi)
+                roi = np.array(roi, dtype=np.float64)
+            else:
+                # Ensure it's float type for consistency
+                roi = roi.astype(np.float64)
             
             roi_log_params = log_params.copy()
             roi_log_params["Files Processed"] = [f"{image_name}_ROI_{i+1}"]
