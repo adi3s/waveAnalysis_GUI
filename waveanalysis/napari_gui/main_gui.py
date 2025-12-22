@@ -511,6 +511,12 @@ class WaveAnalysisWidget(QWidget):
                 # Ensure it's float type for consistency
                 roi = roi.astype(np.float64)
             
+            print("\n" + "="*60)
+            print(f"Processing ROI {i+1}/{len(active_rois)} for {image_name}")
+            print(f"ROI {i+1} shape: {roi.shape}")
+            print(f"ROI {i+1} bounds: Y=[{roi[:, 0].min():.1f}, {roi[:, 0].max():.1f}], X=[{roi[:, 1].min():.1f}, {roi[:, 1].max():.1f}]")
+            print("="*60 + "\n")
+            
             roi_log_params = log_params.copy()
             roi_log_params["Files Processed"] = [f"{image_name}_ROI_{i+1}"]
             
