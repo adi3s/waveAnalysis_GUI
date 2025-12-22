@@ -131,12 +131,22 @@ def calc_indv_CCF_workflow(
     for combo_number, combo in enumerate(channel_combos):
         for bin in range(num_bins):
             # Extract the bin values for the current channel and bin
-            if analysis_type == 'standard':
-                signal1 = sig.savgol_filter(bin_values[:, combo[0], bin], window_length=11, polyorder=3)
-                signal2 = sig.savgol_filter(bin_values[:, combo[1], bin], window_length=11, polyorder=3)
-            else:
-                signal1 = sig.savgol_filter(bin_values[combo[0], bin], window_length=11, polyorder=3)
-                signal2 = sig.savgol_filter(bin_values[combo[1], bin], window_length=11, polyorder=3)
+            try:
+                if analysis_type == 'standard':
+                    signal1 = sig.savgol_filter(bin_values[:, combo[0], bin], window_length=11, polyorder=3)
+                    signal2 = sig.savgol_filter(bin_values[:, combo[1], bin], window_length=11, polyorder=3)
+                else:
+                    signal1 = sig.savgol_filter(bin_values[combo[0], bin], window_length=11, polyorder=3)
+                    signal2 = sig.savgol_filter(bin_values[combo[1], bin], window_length=11, polyorder=3)
+            except np.linalg.LinAlgError as e:
+                # If SVD doesn't converge, use unfiltered signals
+                print(f"Warning: Could not apply Savitzky-Golay filter for CCF combo {combo_number}, bin {bin}: {str(e)}")
+                if analysis_type == 'standard':
+                    signal1 = bin_values[:, combo[0], bin]
+                    signal2 = bin_values[:, combo[1], bin]
+                else:
+                    signal1 = bin_values[combo[0], bin]
+                    signal2 = bin_values[combo[1], bin]
             # Calculate and store the individual CCF for the current combination of channels and bin
             ccf = calc_indv_CCF(signal1=signal1, signal2=signal2, num_frames=num_frames)
             indv_ccfs[combo_number, bin] = ccf
@@ -164,7 +174,11 @@ def calc_indv_CCF(
         cc_curve = np.correlate(corr_signal1, corr_signal2, mode='full')
 
         # Normalize the cross-correlation curve
-        cc_curve = sig.savgol_filter(cc_curve, window_length=11, polyorder=3)
+        try:
+            cc_curve = sig.savgol_filter(cc_curve, window_length=11, polyorder=3)
+        except np.linalg.LinAlgError:
+            # If SVD doesn't converge, skip filtering
+            pass
         cc_curve = cc_curve / (num_frames * signal1.std() * signal2.std())
         # Find peaks in the cross-correlation curve
         peaks, _ = sig.find_peaks(cc_curve, prominence=0.1)

@@ -40,7 +40,26 @@ def calc_indv_peak_props_workflow(
         for bin in range(num_bins):
             # Extract the bin values for the current channel and bin
             signal = bin_values[:, channel, bin] if analysis_type == 'standard' else bin_values[channel, bin]
-            signal = sig.savgol_filter(signal, window_length = 11, polyorder = 2)                 
+            
+            # Diagnostic: Check signal properties (only for first few bins to avoid spam)
+            if bin < 3:
+                print(f"\n*** Bin Diagnostics: Channel {channel}, Bin {bin} ***")
+                print(f"Signal length: {len(signal)}")
+                print(f"Signal range: [{np.min(signal):.2f}, {np.max(signal):.2f}]")
+                print(f"Signal variance: {np.var(signal):.4f}")
+                print(f"Non-zero values: {np.count_nonzero(signal)}/{len(signal)}")
+                print(f"First 10 values: {signal[:10]}")
+            
+            # Try to apply Savitzky-Golay filter, but handle SVD errors gracefully
+            try:
+                signal = sig.savgol_filter(signal, window_length = 11, polyorder = 2)
+            except np.linalg.LinAlgError as e:
+                # If SVD doesn't converge (e.g., ROI too small or insufficient variance), skip filtering
+                if bin < 3:  # Only print detailed warning for first few bins
+                    print(f"Warning: Could not apply Savitzky-Golay filter for channel {channel}, bin {bin}: {str(e)}")
+                    print(f"Processing will continue without filtering for this bin.")
+                    print(f"*** End Bin Diagnostics ***\n")
+                
             peaks, _ = sig.find_peaks(signal, prominence=(np.max(signal)-np.min(signal))*0.1)
 
             # If peaks detected, calculate properties, otherwise return NaNs
@@ -125,7 +144,11 @@ def calc_indv_peak_props_rolling(signal: np.ndarray) -> tuple:
         tuple: A tuple containing the mean width, mean maximum, mean minimum, and mean offset of the peaks. If no peaks are detected, NaN values are returned.
     '''
     # Calculate the peak properties
-    signal = sig.savgol_filter(signal, window_length = 11, polyorder = 2)                 
+    try:
+        signal = sig.savgol_filter(signal, window_length = 11, polyorder = 2)
+    except np.linalg.LinAlgError as e:
+        # If SVD doesn't converge, skip filtering
+        print(f"Warning: Could not apply Savitzky-Golay filter in calc_indv_peak_props: {str(e)}")
     peaks, _ = sig.find_peaks(signal, prominence=(np.max(signal)-np.min(signal))*0.1)
 
     # If peaks detected, calculate properties, otherwise return NaNs
