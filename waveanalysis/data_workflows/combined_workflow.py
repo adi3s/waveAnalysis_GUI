@@ -253,32 +253,44 @@ def combined_workflow(
 
                 # plot the mean ACF figures for the file
                 if plot_summary_ACFs:
-                    mean_acf_figs = pt.plot_mean_ACF_workflow(
-                        img_parameters_dict=img_parameters_dict,
-                        img_props=img_props_dict,
-                        indv_acfs=indv_acfs
-                    )
-                    hf.save_plots(mean_acf_figs, im_save_path)
+                    try:
+                        mean_acf_figs = pt.plot_mean_ACF_workflow(
+                            img_parameters_dict=img_parameters_dict,
+                            img_props=img_props_dict,
+                            indv_acfs=indv_acfs
+                        )
+                        hf.save_plots(mean_acf_figs, im_save_path)
+                    except (ValueError, np.linalg.LinAlgError) as e:
+                        print(f"Warning: Could not generate ACF plots for {file_name}: {str(e)}")
+                        log_params['Plotting errors'].append(f'ACF plots failed for {file_name}: {str(e)}')
 
                 # plot the mean peak properties figures for the file
                 if plot_summary_peaks:
-                    mean_peak_figs = pt.plot_mean_peak_props_workflow(
-                        img_parameters_dict=img_parameters_dict,
-                        img_props=img_props_dict
-                    )
-                    hf.save_plots(mean_peak_figs, im_save_path)
+                    try:
+                        mean_peak_figs = pt.plot_mean_peak_props_workflow(
+                            img_parameters_dict=img_parameters_dict,
+                            img_props=img_props_dict
+                        )
+                        hf.save_plots(mean_peak_figs, im_save_path)
+                    except (ValueError, np.linalg.LinAlgError) as e:
+                        print(f"Warning: Could not generate peak plots for {file_name}: {str(e)}")
+                        log_params['Plotting errors'].append(f'Peak plots failed for {file_name}: {str(e)}')
 
                 # plot the mean CCF figures for the file
                 if plot_summary_CCFs and img_props_dict['num_channels'] > 1:
-                    mean_ccf_figs = pt.plot_mean_CCF_workflow(
-                        img_parameters_dict=img_parameters_dict,
-                        img_props=img_props_dict,
-                        indv_ccfs=indv_ccfs
-                    )
-                    hf.save_plots(mean_ccf_figs, im_save_path)
-                    # save the mean CCF values for the file
-                    mean_ccf_values = get_mean_CCF_values(channel_combos=channel_combos, indv_ccfs=indv_ccfs, frame_interval=img_props_dict['frame_interval'])
-                    save_ccf_values_to_csv(mean_ccf_values, im_save_path)
+                    try:
+                        mean_ccf_figs = pt.plot_mean_CCF_workflow(
+                            img_parameters_dict=img_parameters_dict,
+                            img_props=img_props_dict,
+                            indv_ccfs=indv_ccfs
+                        )
+                        hf.save_plots(mean_ccf_figs, im_save_path)
+                        # save the mean CCF values for the file
+                        mean_ccf_values = get_mean_CCF_values(channel_combos=channel_combos, indv_ccfs=indv_ccfs, frame_interval=img_props_dict['frame_interval'])
+                        save_ccf_values_to_csv(mean_ccf_values, im_save_path)
+                    except (ValueError, np.linalg.LinAlgError) as e:
+                        print(f"Warning: Could not generate CCF plots for {file_name}: {str(e)}")
+                        log_params['Plotting errors'].append(f'CCF plots failed for {file_name}: {str(e)}')
 
                 if calc_wave_speeds:
                     mean_wave_speed_plot = pt.return_mean_wave_speeds_figure(wave_speeds)
@@ -401,7 +413,9 @@ def combined_workflow(
 
         # create dataframe from summary list, then sort and save the summary to a csv file
         summary_df = pd.DataFrame(summary_list, columns=col_headers)
-        summary_df = summary_df.sort_values('File Name', ascending=True)
+        # Only sort if the dataframe is not empty and has the 'File Name' column
+        if not summary_df.empty and 'File Name' in summary_df.columns:
+            summary_df = summary_df.sort_values('File Name', ascending=True)
         summary_df.to_csv(f"{main_save_path}/!{now.strftime('%Y%m%d%H%M')}_summary.csv", index = False) if not test else None
 
         if group_names != ['']:
