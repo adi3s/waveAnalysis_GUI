@@ -82,12 +82,24 @@ def create_multi_frame_bin_array(
     
     # Create a mask if ROI is provided
     if roi is not None:
+        from matplotlib.path import Path
         mask = np.zeros(image.shape[-2:], dtype=bool)
-        # Convert ROI coordinates to integers for indexing
-        roi_int = roi.astype(np.int32)
-        mask[roi_int[:, 1], roi_int[:, 0]] = True
+        
+        # Swap from (y, x) to (x, y) for matplotlib Path
+        roi_xy = roi[:, [1, 0]] if roi.shape[1] == 2 else roi
+        roi_path = Path(roi_xy)
+        
+        y, x = np.mgrid[:image.shape[-2], :image.shape[-1]]
+        points = np.vstack((x.ravel(), y.ravel())).T
+        mask = roi_path.contains_points(points).reshape(image.shape[-2:])
+        
         # Expand mask to match image dimensions
         mask = np.broadcast_to(mask, (num_frames, num_channels) + mask.shape)
+        
+        print(f"\n*** Bin Calculation Mask Diagnostics ***")
+        print(f"Mask shape: {mask.shape}")
+        print(f"Pixels in mask: {np.sum(mask[0, 0])} ({100*np.sum(mask[0, 0])/mask[0, 0].size:.1f}%)")
+        print(f"*** End Mask Diagnostics ***\n")
     else:
         mask = np.ones_like(image[:, 0, :, :], dtype=bool)
 
