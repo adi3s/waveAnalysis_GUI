@@ -244,6 +244,15 @@ class WaveAnalysisWidget(QWidget):
             params = self.values_tab.get_params()
             pre_params = self.pre_process_tab.get_params()
             
+            # Filter images based on "Analyze Current Movie" checkbox
+            if pre_params.get("analyze_current_only", False):
+                if self.current_image_path:
+                    loaded_images = [self.current_image_path]
+                else:
+                    QMessageBox.warning(self, "No Current Image", 
+                                      "No current image selected. Please load an image first.")
+                    return
+            
             main_results_dir = self._create_results_directory(loaded_images[0])
             all_image_results, all_files_processed = self._process_all_images(
                 loaded_images, params, pre_params, main_results_dir

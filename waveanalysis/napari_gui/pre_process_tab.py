@@ -38,19 +38,21 @@ class PreProcessingTab(QWidget):
         analysis_help.setStyleSheet("font-size: 10px; color: gray;")
         analysis_type_layout.addWidget(analysis_help)
         
-        checkbox_layout = QHBoxLayout()
         self.whole_image_checkbox = QCheckBox("Whole Image")
         self.whole_image_checkbox.setChecked(True)
         self.whole_image_checkbox.setToolTip("Analyze the entire image")
+        analysis_type_layout.addWidget(self.whole_image_checkbox)
         
         self.roi_data_checkbox = QCheckBox("ROI Data")
         self.roi_data_checkbox.setChecked(False)
         self.roi_data_checkbox.setToolTip("Analyze individual ROIs (ROIs must be created in the ROI tab)")
         self.roi_data_checkbox.stateChanged.connect(self.on_roi_data_checkbox_changed)
+        analysis_type_layout.addWidget(self.roi_data_checkbox)
         
-        checkbox_layout.addWidget(self.whole_image_checkbox)
-        checkbox_layout.addWidget(self.roi_data_checkbox)
-        analysis_type_layout.addLayout(checkbox_layout)
+        self.analyze_current_checkbox = QCheckBox("Analyze Current Movie")
+        self.analyze_current_checkbox.setChecked(False)
+        self.analyze_current_checkbox.setToolTip("Only analyze the currently selected image/movie instead of all loaded images")
+        analysis_type_layout.addWidget(self.analyze_current_checkbox)
         
         analysis_type_group.setLayout(analysis_type_layout)
         layout.addWidget(analysis_type_group)
@@ -365,5 +367,7 @@ class PreProcessingTab(QWidget):
             "frame_interval": self.frame_interval.value(),
             # Analysis type selection
             "analyze_whole_image": self.whole_image_checkbox.isChecked(),
-            "analyze_roi_data": self.roi_data_checkbox.isChecked()
+            "analyze_roi_data": self.roi_data_checkbox.isChecked(),
+            # Analysis scope
+            "analyze_current_only": self.analyze_current_checkbox.isChecked()
         }
