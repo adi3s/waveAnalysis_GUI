@@ -28,7 +28,6 @@ class ROITab(QWidget):
         self.roi_manager_initialized = False
         self.roi_layer = None
         self.loaded_images = []
-        self.prompted_images = set()  # Track prompted images
         self.init_ui()
 
     def init_ui(self):
@@ -187,8 +186,11 @@ class ROITab(QWidget):
             self.init_roi_btn.setEnabled(False)
             self.roi_manager_initialized = True
             
+            # Get the ROI Manager's layer after a brief delay to ensure it's created
+            QTimer.singleShot(100, self._get_roi_manager_layer)
+            
             if self.current_image_path:
-                self.load_image_rois(self.current_image_path)
+                QTimer.singleShot(150, lambda: self.load_image_rois(self.current_image_path))
             
             QMessageBox.information(self, "Success", "ROI Manager initialized successfully!")
             
@@ -199,6 +201,27 @@ class ROITab(QWidget):
             QMessageBox.warning(self, "ROI Manager Error", 
                               f"Failed to initialize: {str(e)}\n\nUsing fallback mode.")
 
+    def _get_roi_manager_layer(self):
+        """Get the ROI layer created by the ROI Manager."""
+        try:
+            if self.roi_manager and hasattr(self.roi_manager, '_layer'):
+                self.roi_layer = self.roi_manager._layer
+                # Connect to data changes
+                if hasattr(self.roi_layer, 'events') and hasattr(self.roi_layer.events, 'data'):
+                    self.roi_layer.events.data.connect(self.on_shapes_layer_changed)
+                print(f"Found ROI Manager layer: {self.roi_layer.name}")
+            else:
+                # Fallback: search for RoiManagerLayer in viewer
+                for layer in self.viewer.layers:
+                    if type(layer).__name__ == 'RoiManagerLayer':
+                        self.roi_layer = layer
+                        if hasattr(self.roi_layer, 'events') and hasattr(self.roi_layer.events, 'data'):
+                            self.roi_layer.events.data.connect(self.on_shapes_layer_changed)
+                        print(f"Found RoiManagerLayer: {self.roi_layer.name}")
+                        break
+        except Exception as e:
+            print(f"Error getting ROI Manager layer: {e}")
+    
     def create_fallback_roi_layer(self):
         """Create a fallback ROI layer."""
         self._cleanup_existing_roi_layers()
@@ -802,7 +825,7 @@ class ROITab(QWidget):
         return os.path.join(roi_dir, f"{image_name}_ROIs.json")
     
     def _load_rois_from_file(self, image_path):
-        """Load ROI data from file and prompt user."""
+        """Load ROI data from file automatically if it exists."""
         roi_file = self._get_roi_file_path(image_path)
         image_name = os.path.splitext(os.path.basename(image_path))[0]
         shapes_data = []
@@ -819,60 +842,146 @@ class ROITab(QWidget):
             if not rois:
                 return shapes_data
             
-            should_load = False
-            if image_path not in self.prompted_images:
-                self.prompted_images.add(image_path)
-                reply = QMessageBox.question(
-                    self, "Existing ROIs Found", 
-                    f"Found {len(rois)} ROI(s) for {image_name}. Load them?",
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
-                )
-                should_load = (reply == QMessageBox.Yes)
-            else:
-                should_load = (image_path in self.per_image_rois)
-            
-            if should_load:
-                self.per_image_rois[image_path] = []
-                for roi_info in rois:
-                    if 'vertices' in roi_info:
-                        # Convert to integers to avoid indexing errors
-                        vertices = np.array(roi_info['vertices'], dtype=np.float64)
-                        self.per_image_rois[image_path].append(vertices)
-                        shapes_data.append(vertices)
-                self.status_label.setText(f"Status: Loaded {len(rois)} ROIs for {image_name}")
-            else:
-                self.status_label.setText(f"Status: Ready to draw ROIs for {image_name}")
-        except Exception:
-            pass
+            # Automatically load ROIs without prompting
+            self.per_image_rois[image_path] = []
+            for roi_info in rois:
+                if 'vertices' in roi_info:
+                    vertices = np.array(roi_info['vertices'], dtype=np.float64)
+                    self.per_image_rois[image_path].append(vertices)
+                    shapes_data.append(vertices)
+            self.status_label.setText(f"Status: Loaded {len(rois)} ROIs for {image_name}")
+        except Exception as e:
+            print(f"Error loading ROIs from file: {e}")
         
         return shapes_data
     
     def _create_new_roi_layer(self, shapes_data, image_name):
-        """Create a new ROI layer."""
+        """Create a new ROI layer or use the ROI Manager's layer."""
         try:
-            text_properties = self._get_text_properties() if self.show_labels_check.isChecked() else None
-            
-            roi_layer = self.viewer.add_shapes(
-                shapes_data if shapes_data else [],
-                name="ROIs",
-                shape_type='rectangle',
-                edge_color='red',
-                face_color='red',
-                opacity=0.3,
-                text=text_properties
-            )
-            
-            roi_layer.events.data.connect(self.on_shapes_layer_changed)
-            self.roi_layer = roi_layer
-            roi_layer.visible = True
-            self.viewer.layers.selection.active = roi_layer
-            
-            if shapes_data:
-                self.status_label.setText(f"Status: Loaded {len(shapes_data)} ROIs for {image_name}")
+            # If we have a ROI Manager, use its layer
+            if self.roi_manager and hasattr(self.roi_manager, '_layer'):
+                self.roi_layer = self.roi_manager._layer
+                # Add shapes to the existing layer
+                if shapes_data:
+                    self._add_shapes_to_roi_layer(self.roi_layer, shapes_data)
+                    self.status_label.setText(f"Status: Loaded {len(shapes_data)} ROIs for {image_name}")
+                else:
+                    self.status_label.setText(f"Status: Ready to draw ROIs for {image_name}")
             else:
-                self.status_label.setText(f"Status: Ready to draw ROIs for {image_name}")
-        except Exception:
-            pass
+                # Fallback: create our own shapes layer
+                text_properties = self._get_text_properties() if self.show_labels_check.isChecked() else None
+                
+                roi_layer = self.viewer.add_shapes(
+                    shapes_data if shapes_data else [],
+                    name="ROIs",
+                    shape_type='rectangle',
+                    edge_color='red',
+                    face_color='red',
+                    opacity=0.3,
+                    text=text_properties
+                )
+                
+                roi_layer.events.data.connect(self.on_shapes_layer_changed)
+                self.roi_layer = roi_layer
+                roi_layer.visible = True
+                self.viewer.layers.selection.active = roi_layer
+                
+                if shapes_data:
+                    self.status_label.setText(f"Status: Loaded {len(shapes_data)} ROIs for {image_name}")
+                else:
+                    self.status_label.setText(f"Status: Ready to draw ROIs for {image_name}")
+        except Exception as e:
+            print(f"Error creating ROI layer: {e}")
+    
+    def _add_shapes_to_roi_layer(self, roi_layer, shapes_data):
+        """Add shapes to the ROI layer, handling ROI Manager compatibility."""
+        try:
+            # If using ROI Manager, clear both visual layer and table, then add new shapes
+            if self.roi_manager and hasattr(self.roi_manager, '_layer'):
+                self._clear_roi_manager_table(roi_layer)
+                self._sync_shapes_to_roi_manager(roi_layer, shapes_data)
+            else:
+                # Fallback: clear and add all shapes at once
+                if len(roi_layer.data) > 0:
+                    roi_layer.data = []
+                if shapes_data:
+                    roi_layer.add_rectangles(shapes_data)
+        except Exception as e:
+            print(f"Error adding shapes to ROI layer: {e}")
+    
+    def _clear_roi_manager_table(self, roi_layer):
+        """Clear all ROIs from the ROI Manager table and layer."""
+        try:
+            from qtpy.QtWidgets import QApplication
+            
+            # If there are existing shapes, remove them all
+            if len(roi_layer.data) > 0:
+                # Select all shapes
+                roi_layer.selected_data = set(range(len(roi_layer.data)))
+                QApplication.processEvents()
+                
+                # Remove selected shapes
+                roi_layer.remove_selected()
+                QApplication.processEvents()
+                
+                print(f"Cleared ROI Manager table")
+        except Exception as e:
+            print(f"Error clearing ROI Manager table: {e}")
+            # Fallback: just clear the data
+            try:
+                roi_layer.data = []
+            except:
+                pass
+    
+    def _sync_shapes_to_roi_manager(self, roi_layer, shapes_data):
+        """Sync shapes to the ROI Manager table by adding them one at a time and clicking Add button."""
+        try:
+            from qtpy.QtWidgets import QPushButton, QApplication
+            
+            # Find the Add button in the ROI Manager
+            add_btn = None
+            for btn in self.roi_manager.findChildren(QPushButton):
+                btn_text = btn.text().lower()
+                if "add" in btn_text and "layer" not in btn_text:
+                    add_btn = btn
+                    break
+            
+            if not add_btn:
+                print("Could not find Add button in ROI Manager - using fallback method")
+                # Fallback: just add all shapes at once
+                roi_layer.add_rectangles(shapes_data)
+                return
+            
+            # Make sure the ROI layer is selected
+            self.viewer.layers.selection.active = roi_layer
+            QApplication.processEvents()
+            
+            # Add shapes one at a time and register each with the ROI Manager
+            for i, shape in enumerate(shapes_data):
+                # Add single rectangle
+                roi_layer.add_rectangles([shape])
+                QApplication.processEvents()
+                
+                # Select the newly added shape
+                new_index = len(roi_layer.data) - 1
+                roi_layer.selected_data = {new_index}
+                QApplication.processEvents()
+                
+                # Click the Add button to register it in the ROI Manager table
+                add_btn.click()
+                QApplication.processEvents()
+            
+            # Clear selection after all shapes are added
+            roi_layer.selected_data = set()
+            print(f"Successfully synced {len(shapes_data)} ROIs to ROI Manager table")
+            
+        except Exception as e:
+            print(f"Error syncing to ROI Manager: {e}")
+            # Fallback: just add all shapes
+            try:
+                roi_layer.add_rectangles(shapes_data)
+            except:
+                pass
     
     def _update_existing_roi_layer(self, roi_layer, roi_layer_index, shapes_data, image_name):
         """Update an existing ROI layer."""
@@ -884,16 +993,15 @@ class ROITab(QWidget):
             if hasattr(roi_layer, '_moving_value'):
                 roi_layer._moving_value = (None, None)
             
-            # Only update if there are no existing ROIs, or if the loaded shapes_data is not empty
-            # This prevents replacing user-drawn ROIs when switching between images
-            if len(roi_layer.data) == 0 or shapes_data:
-                # If there are existing ROIs and we're loading new ones, preserve the existing ROIs
-                if len(roi_layer.data) > 0 and shapes_data:
-                    # Don't replace - keep existing ROIs
-                    pass
-                else:
-                    # No existing ROIs, so load the saved ones
-                    roi_layer.data = shapes_data
+            # Load ROIs if we have shapes_data
+            if shapes_data:
+                self._add_shapes_to_roi_layer(roi_layer, shapes_data)
+                self.status_label.setText(f"Status: Loaded {len(shapes_data)} ROIs for {image_name}")
+            else:
+                # Clear existing ROIs when switching to an image with no saved ROIs
+                if len(roi_layer.data) > 0:
+                    roi_layer.data = []
+                self.status_label.setText(f"Status: Ready to draw ROIs for {image_name}")
             
             roi_layer.visible = True
             
@@ -902,13 +1010,8 @@ class ROITab(QWidget):
             
             self.viewer.layers.selection.active = roi_layer
             
-            num_rois = len(roi_layer.data)
-            if num_rois > 0:
-                self.status_label.setText(f"Status: {num_rois} ROI(s) present for {image_name}")
-            else:
-                self.status_label.setText(f"Status: Ready to draw ROIs for {image_name}")
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Error updating ROI layer: {e}")
     
     def _get_image_layer(self):
         """Get the current image layer."""
