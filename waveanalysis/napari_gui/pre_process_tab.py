@@ -1,3 +1,6 @@
+import os
+import json
+import numpy as np
 from qtpy.QtWidgets import (
     QWidget, QScrollArea, QVBoxLayout, QDoubleSpinBox, QSpinBox, 
     QPushButton, QGroupBox, QCheckBox, QLabel, QFormLayout,
@@ -43,6 +46,7 @@ class PreProcessingTab(QWidget):
         self.roi_data_checkbox = QCheckBox("ROI Data")
         self.roi_data_checkbox.setChecked(False)
         self.roi_data_checkbox.setToolTip("Analyze individual ROIs (ROIs must be created in the ROI tab)")
+        self.roi_data_checkbox.stateChanged.connect(self.on_roi_data_checkbox_changed)
         
         checkbox_layout.addWidget(self.whole_image_checkbox)
         checkbox_layout.addWidget(self.roi_data_checkbox)
@@ -207,6 +211,95 @@ class PreProcessingTab(QWidget):
     def on_indv_peaks_selected(self, state):
         """Emit signal when individual Peaks checkbox is toggled"""
         self.indv_peaks_selected.emit(state == Qt.Checked)
+    
+    def on_roi_data_checkbox_changed(self, state):
+        """Handle ROI Data checkbox state change - populate ROIs when enabled"""
+        if state == Qt.Checked:
+            self.populate_roi_data_from_files()
+    
+    def populate_roi_data_from_files(self):
+        """Populate ROI data for all loaded images by reading from saved ROI data files"""
+        # Access the parent's values_tab to get loaded images
+        if not hasattr(self.parent, 'values_tab'):
+            print("Warning: Cannot access values_tab")
+            return
+        
+        loaded_images = self.parent.values_tab.get_loaded_images()
+        if not loaded_images:
+            print("No images loaded")
+            return
+        
+        # Access the ROI tab
+        if not hasattr(self.parent, 'roi_tab'):
+            print("Warning: Cannot access roi_tab")
+            return
+        
+        roi_tab = self.parent.roi_tab
+        
+        print("\n" + "="*60)
+        print("ROI DATA POPULATION REPORT")
+        print("="*60)
+        
+        images_with_rois = 0
+        images_without_rois = 0
+        total_rois_loaded = 0
+        
+        for image_path in loaded_images:
+            image_name = os.path.splitext(os.path.basename(image_path))[0]
+            roi_file = self._get_roi_file_path(image_path)
+            
+            if not os.path.exists(roi_file):
+                print(f"✗ {image_name}: No ROI data file found")
+                images_without_rois += 1
+                # Clear ROIs for this image if it was previously loaded
+                if image_path in roi_tab.per_image_rois:
+                    del roi_tab.per_image_rois[image_path]
+                continue
+            
+            try:
+                with open(roi_file, 'r') as f:
+                    roi_data = json.load(f)
+                
+                rois = roi_data.get('rois', [])
+                
+                if not rois:
+                    print(f"✗ {image_name}: ROI file exists but contains no ROIs")
+                    images_without_rois += 1
+                    continue
+                
+                # Populate the ROI data in roi_tab.per_image_rois
+                roi_tab.per_image_rois[image_path] = []
+                for roi_info in rois:
+                    if 'vertices' in roi_info:
+                        vertices = np.array(roi_info['vertices'], dtype=np.float64)
+                        roi_tab.per_image_rois[image_path].append(vertices)
+                
+                num_rois = len(roi_tab.per_image_rois[image_path])
+                print(f"✓ {image_name}: Loaded {num_rois} ROI(s)")
+                images_with_rois += 1
+                total_rois_loaded += num_rois
+                
+            except Exception as e:
+                print(f"✗ {image_name}: Error loading ROI data - {str(e)}")
+                images_without_rois += 1
+        
+        print("="*60)
+        print(f"Summary:")
+        print(f"  Total images: {len(loaded_images)}")
+        print(f"  Images with ROIs: {images_with_rois}")
+        print(f"  Images without ROIs: {images_without_rois}")
+        print(f"  Total ROIs loaded: {total_rois_loaded}")
+        print("="*60 + "\n")
+        
+        # Update the ROI scope label if available
+        if hasattr(roi_tab, 'update_roi_scope_label'):
+            roi_tab.update_roi_scope_label()
+    
+    def _get_roi_file_path(self, image_path):
+        """Get the ROI file path for an image (matches ROI_tab implementation)"""
+        roi_dir = os.path.join(os.path.dirname(image_path), 'ROI_management')
+        image_name = os.path.splitext(os.path.basename(image_path))[0]
+        return os.path.join(roi_dir, f"{image_name}_ROIs.json")
 
     def set_analysis_type(self, analysis_type):
         """Update the UI based on the analysis type (standard, rolling, kymograph)"""
