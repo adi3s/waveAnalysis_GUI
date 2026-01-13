@@ -151,9 +151,8 @@ class ValuesTab(QWidget):
                 # Set the first newly added as current image
                 self.current_image_path = newly_added[0]
                 
-                # Emit signals for each newly added file
-                for file_path in newly_added:
-                    self.image_loaded.emit(file_path)
+                # Emit signal only for the first newly added file to display it
+                self.image_loaded.emit(newly_added[0])
                 
                 # Emit update signal once for all changes
                 self.images_updated.emit(self.image_files.copy())
