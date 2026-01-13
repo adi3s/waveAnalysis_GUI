@@ -269,6 +269,25 @@ class PostProcessingTab(QWidget):
     
     def on_image_filter_changed(self, index):
         """Handle image filter selection change"""
+        selected_filter = self.image_filter_combo.currentText()
+        
+        # If "Show All Images" is selected, do nothing
+        if selected_filter == "Show All Images":
+            if self.results_dir and os.path.exists(self.results_dir):
+                self.show_results()
+            return
+        
+        # If a specific image is selected, find its path and emit signal like values_tab does
+        if self.parent and hasattr(self.parent, 'values_tab'):
+            values_tab = self.parent.values_tab
+            # Find the image path that matches the selected name
+            for image_path in values_tab.image_files:
+                image_name = os.path.splitext(os.path.basename(image_path))[0]
+                if image_name == selected_filter:
+                    # Emit the image_loaded signal to trigger the same behavior as selecting in values_tab
+                    values_tab.image_loaded.emit(image_path)
+                    break
+        
         if self.results_dir and os.path.exists(self.results_dir):
             self.show_results()
 
