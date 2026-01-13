@@ -28,6 +28,11 @@ class ROITab(QWidget):
         self.roi_manager_initialized = False
         self.roi_layer = None
         self.loaded_images = []
+        self.previous_roi_count = 0  # Track previous ROI count for auto-save
+        self.is_drawing = False  # Track if actively drawing
+        self.auto_save_timer = None  # Timer to debounce auto-save
+        self.is_saving = False  # Flag to prevent save loops
+        self.roi_count_monitor_timer = None  # Timer to monitor ROI count changes
         self.init_ui()
 
     def init_ui(self):
@@ -202,25 +207,113 @@ class ROITab(QWidget):
                               f"Failed to initialize: {str(e)}\n\nUsing fallback mode.")
 
     def _get_roi_manager_layer(self):
-        """Get the ROI layer created by the ROI Manager."""
+        """Get the ROI layer created by the ROI Manager and connect to table changes."""
         try:
             if self.roi_manager and hasattr(self.roi_manager, '_layer'):
                 self.roi_layer = self.roi_manager._layer
-                # Connect to data changes
-                if hasattr(self.roi_layer, 'events') and hasattr(self.roi_layer.events, 'data'):
-                    self.roi_layer.events.data.connect(self.on_shapes_layer_changed)
-                print(f"Found ROI Manager layer: {self.roi_layer.name}")
+                
+                # First, inspect the ROI Manager structure
+                self._inspect_roi_manager()
+                
+                # Connect to ROI Manager table changes for auto-save
+                if hasattr(self.roi_manager, '_roilist'):
+                    roi_list = self.roi_manager._roilist
+                    print(f"Found _roilist widget: {type(roi_list).__name__}")
+                    
+                    # Connect to model signals (QRoiListWidget is likely a QTableWidget or similar)
+                    if hasattr(roi_list, 'model') and roi_list.model():
+                        model = roi_list.model()
+                        print(f"Model type: {type(model).__name__}")
+                        
+                        if hasattr(model, 'rowsInserted'):
+                            model.rowsInserted.connect(self.on_roi_table_changed)
+                            print("Connected to rowsInserted signal")
+                        if hasattr(model, 'rowsRemoved'):
+                            model.rowsRemoved.connect(self.on_roi_table_changed)
+                            print("Connected to rowsRemoved signal")
+                        if hasattr(model, 'dataChanged'):
+                            model.dataChanged.connect(self.on_roi_table_changed)
+                            print("Connected to dataChanged signal")
+                    
+                    # Also try direct widget signals
+                    if hasattr(roi_list, 'itemChanged'):
+                        roi_list.itemChanged.connect(self.on_roi_table_changed)
+                        print("Connected to itemChanged signal")
+                    
+                    if hasattr(roi_list, 'cellChanged'):
+                        roi_list.cellChanged.connect(self.on_roi_table_changed)
+                        print("Connected to cellChanged signal")
+                    
+                    # Start monitoring timer as backup
+                    self.roi_count_monitor_timer = QTimer()
+                    self.roi_count_monitor_timer.timeout.connect(self.check_roi_count_changed)
+                    self.roi_count_monitor_timer.start(500)  # Check every 500ms
+                    print("Started ROI count monitor timer")
+                    
+                self.previous_roi_count = 0
             else:
                 # Fallback: search for RoiManagerLayer in viewer
                 for layer in self.viewer.layers:
                     if type(layer).__name__ == 'RoiManagerLayer':
                         self.roi_layer = layer
-                        if hasattr(self.roi_layer, 'events') and hasattr(self.roi_layer.events, 'data'):
-                            self.roi_layer.events.data.connect(self.on_shapes_layer_changed)
-                        print(f"Found RoiManagerLayer: {self.roi_layer.name}")
+                        self.previous_roi_count = 0
                         break
         except Exception as e:
             print(f"Error getting ROI Manager layer: {e}")
+    
+    def _inspect_roi_manager(self):
+        """Inspect ROI Manager structure to find available widgets and signals."""
+        try:
+            print("\n=== ROI Manager Inspection ===")
+            print(f"ROI Manager type: {type(self.roi_manager).__name__}")
+            
+            # List all attributes including private ones
+            print("\nAll ROI Manager attributes (including private):")
+            for attr in dir(self.roi_manager):
+                if not callable(getattr(self.roi_manager, attr, None)):
+                    try:
+                        value = getattr(self.roi_manager, attr)
+                        print(f"  {attr}: {type(value).__name__}")
+                    except:
+                        pass
+            
+            # Check all child widgets of any type
+            print("\nAll child QWidget descendants:")
+            from qtpy.QtWidgets import QWidget
+            for child in self.roi_manager.findChildren(QWidget):
+                widget_type = type(child).__name__
+                obj_name = child.objectName() if child.objectName() else "(no name)"
+                print(f"  {widget_type}: {obj_name}")
+                
+                # Check if this widget has count() method (lists/tables)
+                if hasattr(child, 'count'):
+                    try:
+                        count = child.count()
+                        print(f"    -> Has count() method: {count} items")
+                    except:
+                        pass
+                
+                # Check for rowCount (tables)
+                if hasattr(child, 'rowCount'):
+                    try:
+                        rows = child.rowCount()
+                        print(f"    -> Has rowCount() method: {rows} rows")
+                    except:
+                        pass
+            
+            # Check all buttons
+            print("\nAll buttons:")
+            from qtpy.QtWidgets import QPushButton, QAbstractButton
+            for btn in self.roi_manager.findChildren(QAbstractButton):
+                btn_text = btn.text() if hasattr(btn, 'text') else ""
+                print(f"  {type(btn).__name__}: '{btn_text}'")
+                
+            print("=== End Inspection ===\n")
+            
+        except Exception as e:
+            print(f"Error inspecting ROI Manager: {e}")
+            import traceback
+            traceback.print_exc()
     
     def create_fallback_roi_layer(self):
         """Create a fallback ROI layer."""
@@ -237,7 +330,8 @@ class ROITab(QWidget):
             text=text_properties
         )
         
-        self.roi_layer.events.data.connect(self.on_shapes_layer_changed)
+        # Initialize ROI count
+        self.previous_roi_count = 0
         
         self._enable_operations(True)
         self.status_label.setText("Status: Fallback ROI layer created")
@@ -247,14 +341,94 @@ class ROITab(QWidget):
         
         QMessageBox.information(self, "Success", "Fallback ROI layer created!")
 
-    def on_shapes_layer_changed(self, event=None):
-        """Handle changes to shapes layer data."""
+    def on_roi_table_changed(self, *args, **kwargs):
+        """Handle when ROI Manager table changes (items added/removed/modified)."""
         try:
-            QTimer.singleShot(100, self.delayed_roi_check)
-            # Always update labels when shapes change to ensure proper naming
-            QTimer.singleShot(110, self.update_roi_labels)
-        except Exception:
+            # Prevent triggering during save operation
+            if self.is_saving:
+                return
+            
+            # Update labels
+            QTimer.singleShot(50, self.update_roi_labels)
+            
+            # Trigger auto-save if enabled (with debouncing)
+            if hasattr(self, 'auto_save_check') and self.auto_save_check.isChecked():
+                # Cancel any pending auto-save
+                if self.auto_save_timer is not None:
+                    self.auto_save_timer.stop()
+                    self.auto_save_timer = None
+                
+                # Create new timer with 300ms delay (debounce)
+                self.auto_save_timer = QTimer()
+                self.auto_save_timer.setSingleShot(True)
+                self.auto_save_timer.timeout.connect(self.trigger_auto_save)
+                self.auto_save_timer.start(300)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+    
+    def check_roi_count_changed(self):
+        """Periodically check if ROI count changed (backup method for detecting changes)."""
+        try:
+            # Only check if auto-save is enabled and not currently saving
+            if not (hasattr(self, 'auto_save_check') and self.auto_save_check.isChecked()):
+                return
+            
+            if self.is_saving:
+                return
+            
+            # Get current ROI count from _roilist
+            current_count = 0
+            if self.roi_manager and hasattr(self.roi_manager, '_roilist'):
+                roi_list = self.roi_manager._roilist
+                if hasattr(roi_list, 'rowCount'):
+                    current_count = roi_list.rowCount()
+            
+            # If count changed, trigger table changed handler
+            if current_count != self.previous_roi_count:
+                print(f"ROI count changed: {self.previous_roi_count} -> {current_count}")
+                self.previous_roi_count = current_count
+                self.on_roi_table_changed()
+        except Exception as e:
             pass
+
+
+    
+    def trigger_auto_save(self):
+        """Trigger the actual save operation or delete file if table is empty."""
+        try:
+            if self.is_saving:
+                return
+                
+            self.is_saving = True
+            
+            if self.current_image_path:
+                # Check if ROI table is empty using _roilist
+                table_count = 0
+                if self.roi_manager and hasattr(self.roi_manager, '_roilist'):
+                    roi_list = self.roi_manager._roilist
+                    if hasattr(roi_list, 'rowCount'):
+                        table_count = roi_list.rowCount()
+                
+                print(f"Auto-save triggered: ROI count = {table_count}")
+                
+                if table_count == 0:
+                    # Delete the ROI file if it exists
+                    roi_filename = os.path.splitext(os.path.basename(self.current_image_path))[0] + '_rois.json'
+                    roi_filepath = os.path.join(os.path.dirname(self.current_image_path), roi_filename)
+                    if os.path.exists(roi_filepath):
+                        os.remove(roi_filepath)
+                        print(f"Deleted ROI file: {roi_filename}")
+                else:
+                    # Save ROIs
+                    self.save_rois(auto=True)
+                    print(f"Auto-saved {table_count} ROIs")
+            
+            self.is_saving = False
+        except Exception as e:
+            self.is_saving = False
+            import traceback
+            traceback.print_exc()
 
     def delayed_roi_check(self):
         """Delayed ROI check."""
@@ -331,6 +505,10 @@ class ROITab(QWidget):
             self.status_label.setText("Status: Click 'Initialize ROI Manager' to begin")
             self.init_roi_btn.setEnabled(True)
         
+        # Update ROI count tracking after loading
+        if self.roi_layer and hasattr(self.roi_layer, 'data'):
+            self.previous_roi_count = len(self.roi_layer.data)
+        
         self.update_roi_scope_label()
         
         # Update ROI labels if they are currently being displayed
@@ -351,13 +529,28 @@ class ROITab(QWidget):
 
         try:
             rois = self.get_rois_data()
-            if not rois:
-                if not auto:
-                    QMessageBox.warning(self, "No ROIs", "No ROIs to save.")
-                return
-
             roi_file = self._get_roi_file_path(self.current_image_path)
             os.makedirs(os.path.dirname(roi_file), exist_ok=True)
+            
+            if not rois:
+                # If no ROIs and in auto mode, save empty file to reflect deletion
+                if auto:
+                    # Save empty ROI list to file
+                    data = {
+                        'image_path': self.current_image_path,
+                        'rois': [],
+                        'timestamp': pd.Timestamp.now().isoformat()
+                    }
+                    with open(roi_file, 'w') as f:
+                        json.dump(data, f, indent=2)
+                    
+                    # Update internal tracking
+                    if self.current_image_path in self.per_image_rois:
+                        self.per_image_rois[self.current_image_path] = []
+                    self.update_roi_scope_label()
+                else:
+                    QMessageBox.warning(self, "No ROIs", "No ROIs to save.")
+                return
 
             data = {
                 'image_path': self.current_image_path,
