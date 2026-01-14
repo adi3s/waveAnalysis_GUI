@@ -643,7 +643,8 @@ class ROITab(QWidget):
                 json.dump(data, f, indent=2)
 
             if not auto:
-                QMessageBox.information(self, "Success", f"ROIs saved successfully")
+                num_rois = len(rois)
+                self.status_label.setText(f"Status: Saved {num_rois} ROI{'s' if num_rois != 1 else ''} to {roi_file}")
             
             roi_arrays = [np.array(roi['vertices']) for roi in rois if 'vertices' in roi]
             
