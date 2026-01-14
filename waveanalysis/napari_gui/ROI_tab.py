@@ -33,6 +33,7 @@ class ROITab(QWidget):
         self.auto_save_timer = None  # Timer to debounce auto-save
         self.is_saving = False  # Flag to prevent save loops
         self.roi_count_monitor_timer = None  # Timer to monitor ROI count changes
+        self.is_switching_images = False  # Flag to prevent auto-save during image switch
         self.init_ui()
 
     def init_ui(self):
@@ -344,8 +345,8 @@ class ROITab(QWidget):
     def on_roi_table_changed(self, *args, **kwargs):
         """Handle when ROI Manager table changes (items added/removed/modified)."""
         try:
-            # Prevent triggering during save operation
-            if self.is_saving:
+            # Prevent triggering during save operation or image switching
+            if self.is_saving or self.is_switching_images:
                 return
             
             # Update labels
@@ -370,11 +371,11 @@ class ROITab(QWidget):
     def check_roi_count_changed(self):
         """Periodically check if ROI count changed (backup method for detecting changes)."""
         try:
-            # Only check if auto-save is enabled and not currently saving
+            # Only check if auto-save is enabled, not currently saving, and not switching images
             if not (hasattr(self, 'auto_save_check') and self.auto_save_check.isChecked()):
                 return
             
-            if self.is_saving:
+            if self.is_saving or self.is_switching_images:
                 return
             
             # Get current ROI count from _roilist
@@ -469,6 +470,11 @@ class ROITab(QWidget):
             except:
                 pass
 
+    def _enable_auto_save_after_switch(self):
+        """Re-enable auto-save after image switching is complete."""
+        self.is_switching_images = False
+        print("Auto-save monitoring resumed after image switch")
+
     def delayed_roi_check(self):
         """Delayed ROI check."""
         try:
@@ -531,34 +537,45 @@ class ROITab(QWidget):
         if not image_path:
             return
         
-        image_name = os.path.splitext(os.path.basename(image_path))[0]
-        shapes_data = self._load_rois_from_file(image_path)
+        # Disable auto-save during image switching (only if auto-save is enabled)
+        auto_save_was_enabled = self.auto_save_check.isChecked()
+        if auto_save_was_enabled:
+            self.is_switching_images = True
         
-        # Clear ROI Manager table if no ROIs loaded
-        if not shapes_data and self.roi_manager and hasattr(self.roi_manager, '_roilist'):
-            self._clear_roi_manager_table()
+        try:
+            image_name = os.path.splitext(os.path.basename(image_path))[0]
+            shapes_data = self._load_rois_from_file(image_path)
+            
+            # Clear ROI Manager table if no ROIs loaded
+            if not shapes_data and self.roi_manager and hasattr(self.roi_manager, '_roilist'):
+                self._clear_roi_manager_table()
+            
+            roi_layer, roi_layer_index = self._find_roi_layer_with_index()
+            
+            if roi_layer is None and self.roi_manager_initialized:
+                self._create_new_roi_layer(shapes_data, image_name)
+            elif roi_layer is not None:
+                self._update_existing_roi_layer(roi_layer, roi_layer_index, shapes_data, image_name)
+            elif not self.roi_manager_initialized:
+                self.status_label.setText("Status: Click 'Initialize ROI Manager' to begin")
+                self.init_roi_btn.setEnabled(True)
+            
+            # Update ROI count tracking after loading
+            if self.roi_layer and hasattr(self.roi_layer, 'data'):
+                self.previous_roi_count = len(self.roi_layer.data)
+            else:
+                self.previous_roi_count = 0
+            
+            self.update_roi_scope_label()
+            
+            # Update ROI labels if they are currently being displayed
+            if self.show_labels_check.isChecked():
+                QTimer.singleShot(100, self.update_roi_labels)
         
-        roi_layer, roi_layer_index = self._find_roi_layer_with_index()
-        
-        if roi_layer is None and self.roi_manager_initialized:
-            self._create_new_roi_layer(shapes_data, image_name)
-        elif roi_layer is not None:
-            self._update_existing_roi_layer(roi_layer, roi_layer_index, shapes_data, image_name)
-        elif not self.roi_manager_initialized:
-            self.status_label.setText("Status: Click 'Initialize ROI Manager' to begin")
-            self.init_roi_btn.setEnabled(True)
-        
-        # Update ROI count tracking after loading
-        if self.roi_layer and hasattr(self.roi_layer, 'data'):
-            self.previous_roi_count = len(self.roi_layer.data)
-        else:
-            self.previous_roi_count = 0
-        
-        self.update_roi_scope_label()
-        
-        # Update ROI labels if they are currently being displayed
-        if self.show_labels_check.isChecked():
-            QTimer.singleShot(100, self.update_roi_labels)
+        finally:
+            # Re-enable auto-save after a short delay to ensure all operations complete
+            if auto_save_was_enabled:
+                QTimer.singleShot(500, self._enable_auto_save_after_switch)
 
     def save_rois(self, auto=False):
         """Save ROIs to a file."""
