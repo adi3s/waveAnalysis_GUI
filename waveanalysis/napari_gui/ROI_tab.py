@@ -61,11 +61,6 @@ class ROITab(QWidget):
         self.setup_instructions.setWordWrap(True)
         setup_layout.addWidget(self.setup_instructions)
         
-        self.roi_scope_label = QLabel("ROI Scope: No images loaded")
-        self.roi_scope_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
-        self.roi_scope_label.setWordWrap(True)
-        setup_layout.addWidget(self.roi_scope_label)
-        
         self.init_roi_btn = QPushButton("Initialize ROI Manager")
         self.init_roi_btn.clicked.connect(self.initialize_roi_manager)
         setup_layout.addWidget(self.init_roi_btn)
@@ -516,25 +511,26 @@ class ROITab(QWidget):
         self.update_roi_scope_label()
     
     def update_roi_scope_label(self):
-        """Update the ROI scope label."""
+        """Update the global status panel with ROI scope info (only when ROI Manager is initialized)."""
+        # Only update status panel if ROI Manager is initialized (user is actively using ROI features)
+        if not self.roi_manager_initialized:
+            return
+            
         num_images = len(self.loaded_images)
         if num_images > 1:
             num_with_rois = sum(1 for img in self.loaded_images 
                               if img in self.per_image_rois and self.per_image_rois[img])
-            self.roi_scope_label.setText(f"ROI Scope: {num_with_rois}/{num_images} images have ROIs")
-            self.roi_scope_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
+            self.parent.update_status(f"Status: ROI Scope - {num_with_rois}/{num_images} images have ROIs")
         elif num_images == 1:
             has_rois = (self.current_image_path in self.per_image_rois and 
                        self.per_image_rois[self.current_image_path])
             if has_rois:
                 num_rois = len(self.per_image_rois[self.current_image_path])
-                self.roi_scope_label.setText(f"ROI Scope: Current image has {num_rois} ROI(s)")
+                self.parent.update_status(f"Status: ROI Scope - Current image has {num_rois} ROI(s)")
             else:
-                self.roi_scope_label.setText("ROI Scope: Current image has no ROIs")
-            self.roi_scope_label.setStyleSheet("color: #2196F3; font-weight: bold;")
+                self.parent.update_status("Status: ROI Scope - Current image has no ROIs")
         else:
-            self.roi_scope_label.setText("ROI Scope: No images loaded")
-            self.roi_scope_label.setStyleSheet("color: #FF9800; font-weight: bold;")
+            self.parent.update_status("Status: ROI Scope - No images loaded")
     
     def load_image_rois(self, image_path):
         """Load and display ROIs for a specific image."""
