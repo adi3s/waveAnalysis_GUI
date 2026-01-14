@@ -2,12 +2,12 @@ import os
 import datetime
 import numpy as np
 import pandas as pd
-from qtpy.QtWidgets import QWidget, QScrollArea, QTabWidget, QVBoxLayout, QMessageBox
+from qtpy.QtWidgets import QWidget, QScrollArea, QTabWidget, QVBoxLayout, QMessageBox, QTextEdit, QSplitter
 from qtpy.QtCore import Qt
-from napari_gui.values_tab import ValuesTab
-from napari_gui.ROI_tab import ROITab
-from napari_gui.pre_process_tab import PreProcessingTab
-from napari_gui.post_process_tab import PostProcessingTab
+from .values_tab import ValuesTab
+from .ROI_tab import ROITab
+from .pre_process_tab import PreProcessingTab
+from .post_process_tab import PostProcessingTab
 from waveanalysis.image_props import image_bin_calc, image_properties, image_to_np_arrays
 from waveanalysis.data_workflows import combined_workflow, rolling_workflow
 from waveanalysis.signal_processing import correlation_functions, peak_properties, wave_speed
@@ -28,6 +28,9 @@ class WaveAnalysisWidget(QWidget):
         
         self._init_ui()
         self._connect_signals()
+        
+        # Set initial status
+        self.update_status("Status: Ready - Load images to begin")
     
     def _install_napari_error_handler(self):
         """Install error handler to suppress harmless napari internal errors."""
@@ -101,11 +104,39 @@ class WaveAnalysisWidget(QWidget):
         self.tabs.addTab(self.roi_scroll, "ROI")
         self.tabs.addTab(self.pre_process_scroll, "Pre Processing")
         self.tabs.addTab(self.post_process_tab, "Post Processing")
+        
+        # Create global status panel
+        self.status_panel = QTextEdit()
+        self.status_panel.setReadOnly(True)
+        self.status_panel.setMinimumHeight(80)   # Minimum height
+        self.status_panel.setMaximumHeight(200)  # Maximum height
+        self.status_panel.setPlainText("Status: Ready")
+        self.status_panel.setStyleSheet("""
+            QTextEdit {
+                background-color: #e8f4e8;
+                border: 2px solid #4CAF50;
+                border-radius: 3px;
+                padding: 5px;
+                font-family: monospace;
+                font-size: 10pt;
+                color: #333333;
+            }
+        """)
 
-        # Set up main layout
+        # Set up main layout with splitter for adjustable height
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(self.tabs)
+        splitter.addWidget(self.status_panel)
+        splitter.setStretchFactor(0, 4)  # Tabs get more space
+        splitter.setStretchFactor(1, 1)  # Status panel gets less space
+        splitter.setCollapsible(0, False)  # Tabs cannot be collapsed
+        splitter.setCollapsible(1, False)  # Status panel cannot be collapsed
+        splitter.setSizes([400, 120])  # Initial sizes: tabs 400px, status 120px
+        
         layout = QVBoxLayout()
-        layout.addWidget(self.tabs)
+        layout.addWidget(splitter)
         layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
         self.setLayout(layout)
         
         self.setMinimumWidth(350)
@@ -119,6 +150,10 @@ class WaveAnalysisWidget(QWidget):
         self.roi_tab.roi_saved.connect(self.handle_new_roi)
         self.roi_tab.roi_updated.connect(self.process_roi)
         self.pre_process_tab.analyze.clicked.connect(self.run_analysis)
+    
+    def update_status(self, message):
+        """Update the global status panel with a new message."""
+        self.status_panel.setPlainText(message)
 
     def _create_scrollable_tab(self, tab_widget):
         """Create a scrollable wrapper for a tab widget."""
@@ -141,6 +176,9 @@ class WaveAnalysisWidget(QWidget):
         self.roi_tab.set_current_image(image_path)
         self._organize_layer_order(image_layer)
         self._update_log_params(img_props, image_path)
+        
+        # Show generic image loaded message
+        self.update_status(f"Status: Image loaded - {os.path.basename(image_path)}")
 
     def _clear_previous_image_layers(self):
         """Remove previous image layers from viewer."""
@@ -311,7 +349,7 @@ class WaveAnalysisWidget(QWidget):
         # Build error message for status label
         problem_count = len(missing_roi_images) + len(empty_roi_images)
         status_msg = f"ROI Data Issue: {problem_count} image(s) missing or have empty ROI data"
-        self.roi_tab.status_label.setText(status_msg)
+        self.update_status(status_msg)
         
         # Build detailed message for dialog
         dialog_msg = "The following images have ROI data issues:\n\n"
@@ -344,11 +382,11 @@ class WaveAnalysisWidget(QWidget):
         )
         
         if reply == QMessageBox.Abort:
-            self.roi_tab.status_label.setText("Status: Analysis aborted due to ROI data issues")
+            self.update_status("Status: Analysis aborted due to ROI data issues")
             return False
         else:
             # User chose to skip problematic images
-            self.roi_tab.status_label.setText(f"Status: Skipping {problem_count} image(s) with ROI issues")
+            self.update_status(f"Status: Skipping {problem_count} image(s) with ROI issues")
             
             # Remove problematic images from loaded_images list
             problem_images = set(missing_roi_images + empty_roi_images)
@@ -364,7 +402,7 @@ class WaveAnalysisWidget(QWidget):
                     "No Images to Process",
                     "All images have ROI data issues. No analysis will be performed."
                 )
-                self.roi_tab.status_label.setText("Status: No valid images to analyze")
+                self.update_status("Status: No valid images to analyze")
                 return False
             
             return True

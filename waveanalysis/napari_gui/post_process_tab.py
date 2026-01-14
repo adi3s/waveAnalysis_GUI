@@ -44,10 +44,6 @@ class PostProcessingTab(QWidget):
         # Main layout
         layout = QVBoxLayout()
         
-        # Add status bar at the top
-        self.status_label = QLabel("No results loaded")
-        layout.addWidget(self.status_label)
-        
         # Add image selector dropdown for filtering (initially hidden)
         self.image_filter_widget = QWidget()
         filter_layout = QHBoxLayout()
@@ -420,7 +416,7 @@ class PostProcessingTab(QWidget):
             return
         
         if not file_paths:
-            self.status_label.setText(f"No processed files found for {display_type}.")
+            self.parent.update_status(f"No processed files found for {display_type}.")
             
             # Display a helpful message
             container = QWidget()
@@ -615,7 +611,7 @@ class PostProcessingTab(QWidget):
             row += 1
         
         # Update status message
-        self.status_label.setText(f"Displaying {len(grouped_files)} result groups for {display_type}.")
+        self.parent.update_status(f"Displaying {len(grouped_files)} result groups for {display_type}.")
         
         # Add a stretch at the end to keep plots left-aligned
         self.results_layout.addStretch()
@@ -1066,7 +1062,7 @@ class PostProcessingTab(QWidget):
                 grids_created += 1
         
         if grids_created > 0:
-            self.status_label.setText(f"Displayed {grids_created} ROI bin grid(s)")
+            self.parent.update_status(f"Displayed {grids_created} ROI bin grid(s)")
         else:
             QMessageBox.information(self, "No ROI Data", 
                                    "No ROI data found. Make sure ROIs were created and analyzed.")
@@ -1243,7 +1239,7 @@ class PostProcessingTab(QWidget):
         comparison_plots = self.generate_roi_comparison_plots(selected_statistic)
         
         if not comparison_plots:
-            self.status_label.setText("No ROI statistics available for comparison.")
+            self.parent.update_status("No ROI statistics available for comparison.")
             
             # Display a helpful message
             container = QWidget()
@@ -1293,7 +1289,7 @@ class PostProcessingTab(QWidget):
                 row += 1
         
         # Update status message
-        self.status_label.setText(f"Displaying {len(comparison_plots)} ROI comparison plots for {selected_statistic}.")
+        self.parent.update_status(f"Displaying {len(comparison_plots)} ROI comparison plots for {selected_statistic}.")
         
         # Add a stretch at the end
         self.results_layout.addStretch()
@@ -1305,7 +1301,7 @@ class PostProcessingTab(QWidget):
         import waveanalysis.housekeeping.housekeeping_functions as hf
         
         if not hasattr(hf, 'indv_plots_cache') or not hf.indv_plots_cache:
-            self.status_label.setText("No cached individual plots available.")
+            self.parent.update_status("No cached individual plots available.")
             return
         
         # Create a grid layout
@@ -1372,7 +1368,7 @@ class PostProcessingTab(QWidget):
                         col = 0
                         row += 1
         
-        self.status_label.setText(f"Displaying {plot_count} individual bin plots from cache (not yet saved to disk).")
+        self.parent.update_status(f"Displaying {plot_count} individual bin plots from cache (not yet saved to disk).")
         self.results_layout.addStretch()
     
     def save_individual_plots(self):

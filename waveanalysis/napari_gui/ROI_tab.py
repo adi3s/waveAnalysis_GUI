@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QGroupBox,
-    QLabel, QMessageBox, QCheckBox, QScrollArea
+    QLabel, QCheckBox, QScrollArea
 )
 from qtpy.QtCore import Signal, Qt
 from qtpy.QtCore import QTimer
@@ -69,9 +69,6 @@ class ROITab(QWidget):
         self.init_roi_btn = QPushButton("Initialize ROI Manager")
         self.init_roi_btn.clicked.connect(self.initialize_roi_manager)
         setup_layout.addWidget(self.init_roi_btn)
-        
-        self.status_label = QLabel("Status: Not initialized")
-        setup_layout.addWidget(self.status_label)
         
         setup_group.setLayout(setup_layout)
         layout.addWidget(setup_group)
@@ -170,7 +167,7 @@ class ROITab(QWidget):
             return
         
         if not self._has_image_loaded():
-            QMessageBox.warning(self, "No Image", "Please load an image first.")
+            self.parent.update_status("Status: Please load an image first")
             return
         
         try:
@@ -187,7 +184,7 @@ class ROITab(QWidget):
             self.fallback_container.setVisible(False)
             
             self._enable_operations(True)
-            self.status_label.setText("Status: ROI Manager initialized")
+            self.parent.update_status("Status: ROI Manager initialized")
             self.init_roi_btn.setText("ROI Manager Initialized")
             self.init_roi_btn.setEnabled(False)
             self.roi_manager_initialized = True
@@ -198,14 +195,10 @@ class ROITab(QWidget):
             if self.current_image_path:
                 QTimer.singleShot(150, lambda: self.load_image_rois(self.current_image_path))
             
-            QMessageBox.information(self, "Success", "ROI Manager initialized successfully!")
-            
         except Exception as e:
-            self.status_label.setText(f"Status: Error - {str(e)}")
+            self.parent.update_status(f"Status: ROI Manager error - {str(e)} (using fallback mode)")
             self.fallback_container.setVisible(True)
             self.roi_manager_container.setVisible(False)
-            QMessageBox.warning(self, "ROI Manager Error", 
-                              f"Failed to initialize: {str(e)}\n\nUsing fallback mode.")
 
     def _get_roi_manager_layer(self):
         """Get the ROI layer created by the ROI Manager and connect to table changes."""
@@ -343,12 +336,10 @@ class ROITab(QWidget):
         self.previous_roi_count = 0
         
         self._enable_operations(True)
-        self.status_label.setText("Status: Fallback ROI layer created")
+        self.parent.update_status("Status: Fallback ROI layer created")
         self.init_roi_btn.setText("ROI Layer Created")
         self.init_roi_btn.setEnabled(False)
         self.roi_manager_initialized = True
-        
-        QMessageBox.information(self, "Success", "Fallback ROI layer created!")
 
     def on_roi_table_changed(self, *args, **kwargs):
         """Handle when ROI Manager table changes (items added/removed/modified)."""
@@ -435,6 +426,7 @@ class ROITab(QWidget):
                     if os.path.exists(roi_filepath):
                         os.remove(roi_filepath)
                         print(f"Deleted ROI file: {roi_filepath}")
+                        self.parent.update_status("Status: ROIs cleared - auto-saved")
                     
                     # Update internal tracking
                     if self.current_image_path in self.per_image_rois:
@@ -443,6 +435,7 @@ class ROITab(QWidget):
                 else:
                     # Save ROIs
                     self.save_rois(auto=True)
+                    self.parent.update_status(f"Status: Auto-saved {table_count} ROI(s)")
                     print(f"Auto-saved {table_count} ROIs")
             
             self.is_saving = False
@@ -499,16 +492,16 @@ class ROITab(QWidget):
         """Refresh ROI detection."""
         rois = self.get_rois_data()
         if rois:
-            QMessageBox.information(self, "ROIs Found", f"Found {len(rois)} ROIs")
+            self.parent.update_status(f"Status: Found {len(rois)} ROI(s) in current image")
         else:
-            QMessageBox.warning(self, "No ROIs", "No ROIs detected. Draw ROIs using napari tools.")
+            self.parent.update_status("Status: No ROIs detected - Draw ROIs using napari tools")
 
     def set_current_image(self, image_path):
         """Set the current image path."""
         self.current_image_path = image_path
         if image_path:
             if not self.roi_manager_initialized:
-                self.status_label.setText("Status: Image loaded - Ready to initialize ROI Manager")
+                # Don't update status here - let main_gui handle it
                 self.init_roi_btn.setEnabled(True)
             else:
                 self.load_image_rois(image_path)
@@ -568,7 +561,7 @@ class ROITab(QWidget):
             elif roi_layer is not None:
                 self._update_existing_roi_layer(roi_layer, roi_layer_index, shapes_data, image_name)
             elif not self.roi_manager_initialized:
-                self.status_label.setText("Status: Click 'Initialize ROI Manager' to begin")
+                # Don't show ROI-specific message here - only when user interacts with ROI tab
                 self.init_roi_btn.setEnabled(True)
             
             # Update ROI count tracking after loading
@@ -603,12 +596,12 @@ class ROITab(QWidget):
         """Save ROIs to a file."""
         if not self.roi_manager_initialized:
             if not auto:
-                QMessageBox.warning(self, "ROI Manager Not Ready", "Please initialize ROI Manager first.")
+                self.parent.update_status("Status: Cannot save - ROI Manager not initialized")
             return
             
         if not self.current_image_path:
             if not auto:
-                QMessageBox.warning(self, "No Image", "No image loaded.")
+                self.parent.update_status("Status: Cannot save - no image loaded")
             return
 
         try:
@@ -624,10 +617,10 @@ class ROITab(QWidget):
                         self.per_image_rois[self.current_image_path] = []
                     self.update_roi_scope_label()
                     if not auto:
-                        QMessageBox.information(self, "ROIs Cleared", "No ROIs in table. Existing ROI file deleted.")
+                        self.parent.update_status("Status: ROIs cleared - existing ROI file deleted")
                 else:
                     if not auto:
-                        QMessageBox.warning(self, "No ROIs", "No ROIs to save.")
+                        self.parent.update_status("Status: No ROIs to save")
                 return
 
             # Save ROIs to file
@@ -644,7 +637,7 @@ class ROITab(QWidget):
 
             if not auto:
                 num_rois = len(rois)
-                self.status_label.setText(f"Status: Saved {num_rois} ROI{'s' if num_rois != 1 else ''} to {roi_file}")
+                self.parent.update_status(f"Status: Saved {num_rois} ROI{'s' if num_rois != 1 else ''} to {roi_file}")
             
             roi_arrays = [np.array(roi['vertices']) for roi in rois if 'vertices' in roi]
             
@@ -657,16 +650,16 @@ class ROITab(QWidget):
                 
         except Exception as e:
             if not auto:
-                QMessageBox.critical(self, "Error", f"Failed to save ROIs: {str(e)}")
+                self.parent.update_status(f"Status: Error saving ROIs - {str(e)}")
     
     def save_roi_snapshot(self):
         """Save a PNG snapshot of the current image frame with ROIs and labels."""
         if not self.current_image_path:
-            QMessageBox.warning(self, "No Image", "No image loaded.")
+            self.parent.update_status("Status: Cannot save snapshot - no image loaded")
             return
         
         if not self.roi_manager_initialized:
-            QMessageBox.warning(self, "ROI Manager Not Ready", "Please initialize ROI Manager first.")
+            self.parent.update_status("Status: Cannot save snapshot - ROI Manager not initialized")
             return
         
         try:
@@ -677,7 +670,7 @@ class ROITab(QWidget):
             # Get the image layer
             image_layer = self._get_image_layer()
             if image_layer is None:
-                QMessageBox.warning(self, "No Image", "No image found in viewer.")
+                self.parent.update_status("Status: Cannot save snapshot - no image found in viewer")
                 return
             
             # Get image data (first frame if it's a stack)
@@ -689,20 +682,14 @@ class ROITab(QWidget):
                 frame_data = frame_data[0]
             
             if frame_data.ndim != 2:
-                QMessageBox.warning(self, "Invalid Image", 
-                                  f"Could not extract 2D frame from image with shape {image_data.shape}")
+                self.parent.update_status(f"Status: Cannot save snapshot - could not extract 2D frame from shape {image_data.shape}")
                 return
             
             # Get ROI layer
             roi_layer = self._find_roi_layer()
             if roi_layer is None or len(roi_layer.data) == 0:
-                reply = QMessageBox.question(
-                    self, "No ROIs", 
-                    "No ROIs found. Save image without ROIs?",
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-                )
-                if reply == QMessageBox.No:
-                    return
+                # Just proceed without ROIs, no need to ask
+                pass
             
             # Create figure
             fig, ax = plt.subplots(figsize=(10, 10))
@@ -763,25 +750,22 @@ class ROITab(QWidget):
             fig.savefig(snapshot_file, dpi=150, bbox_inches='tight', pad_inches=0.1)
             plt.close(fig)
             
-            QMessageBox.information(
-                self, "Success", 
-                f"ROI snapshot saved to:\n{snapshot_file}"
-            )
+            self.parent.update_status(f"Status: ROI snapshot saved to {snapshot_file}")
             
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
             print(f"Error saving ROI snapshot:\n{error_details}")
-            QMessageBox.critical(self, "Error", f"Failed to save snapshot:\n{str(e)}")
+            self.parent.update_status(f"Status: Error saving snapshot - {str(e)}")
     
     def save_roi_crops(self):
         """Save cropped TIF files for each ROI with all dimensions preserved."""
         if not self.current_image_path:
-            QMessageBox.warning(self, "No Image", "No image loaded.")
+            self.parent.update_status("Status: Cannot save crops - no image loaded")
             return
         
         if not self.roi_manager_initialized:
-            QMessageBox.warning(self, "ROI Manager Not Ready", "Please initialize ROI Manager first.")
+            self.parent.update_status("Status: Cannot save crops - ROI Manager not initialized")
             return
         
         try:
@@ -790,7 +774,7 @@ class ROITab(QWidget):
             # Get the image layer
             image_layer = self._get_image_layer()
             if image_layer is None:
-                QMessageBox.warning(self, "No Image", "No image found in viewer.")
+                self.parent.update_status("Status: Cannot save crops - no image found in viewer")
                 return
             
             # Get full image data (all dimensions)
@@ -799,7 +783,7 @@ class ROITab(QWidget):
             # Get ROI layer
             roi_layer = self._find_roi_layer()
             if roi_layer is None or len(roi_layer.data) == 0:
-                QMessageBox.warning(self, "No ROIs", "No ROIs found to crop.")
+                self.parent.update_status("Status: Cannot save crops - no ROIs found")
                 return
             
             # Create cropped folder
@@ -867,24 +851,17 @@ class ROITab(QWidget):
                     continue
             
             if saved_count > 0:
-                QMessageBox.information(
-                    self, "Success", 
-                    f"Saved {saved_count} ROI crop(s) to:\n{roi_dir}"
-                )
+                self.parent.update_status(f"Status: Saved {saved_count} ROI crop(s) to {roi_dir}")
             else:
-                QMessageBox.warning(self, "No Crops Saved", "Could not save any ROI crops.")
+                self.parent.update_status("Status: Warning - Could not save any ROI crops")
                 
         except ImportError:
-            QMessageBox.critical(
-                self, "Missing Library", 
-                "tifffile library is required to save TIF files.\n"
-                "Install it with: pip install tifffile"
-            )
+            self.parent.update_status("Status: Error - tifffile library required for TIF export")
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
             print(f"Error saving ROI crops:\n{error_details}")
-            QMessageBox.critical(self, "Error", f"Failed to save crops:\n{str(e)}")
+            self.parent.update_status(f"Status: Error saving crops - {str(e)}")
 
     def get_rois_data(self):
         """Get ROI data from the ROI manager."""
@@ -1200,7 +1177,7 @@ class ROITab(QWidget):
                     vertices = np.array(roi_info['vertices'], dtype=np.float64)
                     self.per_image_rois[image_path].append(vertices)
                     shapes_data.append(vertices)
-            self.status_label.setText(f"Status: Loaded {len(rois)} ROIs for {image_name}")
+            # Don't update status here - silent internal operation
         except Exception as e:
             print(f"Error loading ROIs from file: {e}")
         
@@ -1215,9 +1192,8 @@ class ROITab(QWidget):
                 # Add shapes to the existing layer
                 if shapes_data:
                     self._add_shapes_to_roi_layer(self.roi_layer, shapes_data)
-                    self.status_label.setText(f"Status: Loaded {len(shapes_data)} ROIs for {image_name}")
-                else:
-                    self.status_label.setText(f"Status: Ready to draw ROIs for {image_name}")
+                    # Don't update status here - silent internal operation
+                # else: don't show "ready to draw" message either
                 
                 # Ensure text property matches checkbox state
                 if hasattr(self.roi_layer, 'text'):
@@ -1244,10 +1220,7 @@ class ROITab(QWidget):
                 roi_layer.visible = True
                 self.viewer.layers.selection.active = roi_layer
                 
-                if shapes_data:
-                    self.status_label.setText(f"Status: Loaded {len(shapes_data)} ROIs for {image_name}")
-                else:
-                    self.status_label.setText(f"Status: Ready to draw ROIs for {image_name}")
+                # Don't update status here - silent internal operation
         except Exception as e:
             print(f"Error creating ROI layer: {e}")
     
@@ -1352,12 +1325,12 @@ class ROITab(QWidget):
             # Load ROIs if we have shapes_data
             if shapes_data:
                 self._add_shapes_to_roi_layer(roi_layer, shapes_data)
-                self.status_label.setText(f"Status: Loaded {len(shapes_data)} ROIs for {image_name}")
+                # Don't update status here - silent internal operation
             else:
                 # Clear existing ROIs when switching to an image with no saved ROIs
                 if len(roi_layer.data) > 0:
                     roi_layer.data = []
-                self.status_label.setText(f"Status: Ready to draw ROIs for {image_name}")
+                # Don't update status here - silent internal operation
             
             # Ensure text property matches checkbox state after loading
             if hasattr(roi_layer, 'text'):
