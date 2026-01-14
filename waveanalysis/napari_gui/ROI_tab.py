@@ -614,14 +614,25 @@ class ROITab(QWidget):
         try:
             rois = self.get_rois_data()
             roi_file = self._get_roi_file_path(self.current_image_path)
-            os.makedirs(os.path.dirname(roi_file), exist_ok=True)
             
             if not rois:
-                # If no ROIs, don't save anything (let trigger_auto_save handle deletion)
-                if not auto:
-                    QMessageBox.warning(self, "No ROIs", "No ROIs to save.")
+                # If no ROIs, delete the file if it exists (consistent with auto-save behavior)
+                if os.path.exists(roi_file):
+                    os.remove(roi_file)
+                    # Update internal tracking
+                    if self.current_image_path in self.per_image_rois:
+                        self.per_image_rois[self.current_image_path] = []
+                    self.update_roi_scope_label()
+                    if not auto:
+                        QMessageBox.information(self, "ROIs Cleared", "No ROIs in table. Existing ROI file deleted.")
+                else:
+                    if not auto:
+                        QMessageBox.warning(self, "No ROIs", "No ROIs to save.")
                 return
 
+            # Save ROIs to file
+            os.makedirs(os.path.dirname(roi_file), exist_ok=True)
+            
             data = {
                 'image_path': self.current_image_path,
                 'rois': rois,
