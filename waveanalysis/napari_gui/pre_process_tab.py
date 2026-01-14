@@ -4,7 +4,7 @@ import numpy as np
 from qtpy.QtWidgets import (
     QWidget, QScrollArea, QVBoxLayout, QDoubleSpinBox, QSpinBox, 
     QPushButton, QGroupBox, QCheckBox, QLabel, QFormLayout,
-    QHBoxLayout, QComboBox
+    QHBoxLayout
 )
 from magicgui import magicgui
 from qtpy.QtCore import Signal, Qt
@@ -56,35 +56,6 @@ class PreProcessingTab(QWidget):
         
         analysis_type_group.setLayout(analysis_type_layout)
         layout.addWidget(analysis_type_group)
-        
-        # Add ROI Processing group
-        roi_group = QGroupBox("ROI Processing")
-        roi_layout = QVBoxLayout()
-        
-        # Channel selection for ROIs
-        channel_layout = QHBoxLayout()
-        channel_layout.addWidget(QLabel("ROI Channel:"))
-        self.roi_channel_combo = QComboBox()
-        self.roi_channel_combo.addItems(["First", "Max Projection", "Mean Projection"])
-        channel_layout.addWidget(self.roi_channel_combo)
-        roi_layout.addLayout(channel_layout)
-        
-        # Frame options for ROI time series
-        roi_frame_layout = QHBoxLayout()
-        self.process_all_frames = QCheckBox("Process all frames")
-        self.process_all_frames.setChecked(True)
-        roi_frame_layout.addWidget(self.process_all_frames)
-        
-        roi_frame_layout.addWidget(QLabel("Frame interval:"))
-        self.frame_interval = QSpinBox()
-        self.frame_interval.setMinimum(1)
-        self.frame_interval.setMaximum(1000)
-        self.frame_interval.setValue(1)
-        roi_frame_layout.addWidget(self.frame_interval)
-        roi_layout.addLayout(roi_frame_layout)
-        
-        roi_group.setLayout(roi_layout)
-        layout.addWidget(roi_group)
         
         # Threshold controls
         self.threshold = QDoubleSpinBox()
@@ -361,10 +332,6 @@ class PreProcessingTab(QWidget):
             "plot_indv_acfs": plot_indv_acfs,
             "plot_indv_ccfs": plot_indv_ccfs,
             "plot_indv_peaks": plot_indv_peaks,
-            # ROI processing parameters
-            "roi_channel": self.roi_channel_combo.currentText(),
-            "process_all_frames": self.process_all_frames.isChecked(),
-            "frame_interval": self.frame_interval.value(),
             # Analysis type selection
             "analyze_whole_image": self.whole_image_checkbox.isChecked(),
             "analyze_roi_data": self.roi_data_checkbox.isChecked(),
