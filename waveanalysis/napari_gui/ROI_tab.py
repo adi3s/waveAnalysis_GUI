@@ -412,13 +412,22 @@ class ROITab(QWidget):
                 
                 print(f"Auto-save triggered: ROI count = {table_count}")
                 
+                # Use the same file path method as save_rois
+                roi_filepath = self._get_roi_file_path(self.current_image_path)
+                
+                print(f"ROI file path: {roi_filepath}")
+                print(f"File exists: {os.path.exists(roi_filepath)}")
+                
                 if table_count == 0:
-                    # Delete the ROI file if it exists
-                    roi_filename = os.path.splitext(os.path.basename(self.current_image_path))[0] + '_rois.json'
-                    roi_filepath = os.path.join(os.path.dirname(self.current_image_path), roi_filename)
+                    # Delete the ROI file if it exists and clear internal tracking
                     if os.path.exists(roi_filepath):
                         os.remove(roi_filepath)
-                        print(f"Deleted ROI file: {roi_filename}")
+                        print(f"Deleted ROI file: {roi_filepath}")
+                    
+                    # Update internal tracking
+                    if self.current_image_path in self.per_image_rois:
+                        self.per_image_rois[self.current_image_path] = []
+                    self.update_roi_scope_label()
                 else:
                     # Save ROIs
                     self.save_rois(auto=True)
@@ -429,6 +438,36 @@ class ROITab(QWidget):
             self.is_saving = False
             import traceback
             traceback.print_exc()
+
+    def _clear_roi_manager_table(self):
+        """Clear all ROIs from the ROI Manager table and layer."""
+        try:
+            from qtpy.QtWidgets import QApplication
+            
+            # Get the roi_layer
+            roi_layer = self.roi_layer
+            if not roi_layer:
+                return
+            
+            # If there are existing shapes, remove them all
+            if hasattr(roi_layer, 'data') and len(roi_layer.data) > 0:
+                # Select all shapes
+                roi_layer.selected_data = set(range(len(roi_layer.data)))
+                QApplication.processEvents()
+                
+                # Remove selected shapes
+                roi_layer.remove_selected()
+                QApplication.processEvents()
+                
+                print(f"Cleared ROI Manager table")
+        except Exception as e:
+            print(f"Error clearing ROI Manager table: {e}")
+            # Fallback: just clear the data
+            try:
+                if roi_layer and hasattr(roi_layer, 'data'):
+                    roi_layer.data = []
+            except:
+                pass
 
     def delayed_roi_check(self):
         """Delayed ROI check."""
@@ -495,6 +534,10 @@ class ROITab(QWidget):
         image_name = os.path.splitext(os.path.basename(image_path))[0]
         shapes_data = self._load_rois_from_file(image_path)
         
+        # Clear ROI Manager table if no ROIs loaded
+        if not shapes_data and self.roi_manager and hasattr(self.roi_manager, '_roilist'):
+            self._clear_roi_manager_table()
+        
         roi_layer, roi_layer_index = self._find_roi_layer_with_index()
         
         if roi_layer is None and self.roi_manager_initialized:
@@ -508,6 +551,8 @@ class ROITab(QWidget):
         # Update ROI count tracking after loading
         if self.roi_layer and hasattr(self.roi_layer, 'data'):
             self.previous_roi_count = len(self.roi_layer.data)
+        else:
+            self.previous_roi_count = 0
         
         self.update_roi_scope_label()
         
@@ -533,22 +578,8 @@ class ROITab(QWidget):
             os.makedirs(os.path.dirname(roi_file), exist_ok=True)
             
             if not rois:
-                # If no ROIs and in auto mode, save empty file to reflect deletion
-                if auto:
-                    # Save empty ROI list to file
-                    data = {
-                        'image_path': self.current_image_path,
-                        'rois': [],
-                        'timestamp': pd.Timestamp.now().isoformat()
-                    }
-                    with open(roi_file, 'w') as f:
-                        json.dump(data, f, indent=2)
-                    
-                    # Update internal tracking
-                    if self.current_image_path in self.per_image_rois:
-                        self.per_image_rois[self.current_image_path] = []
-                    self.update_roi_scope_label()
-                else:
+                # If no ROIs, don't save anything (let trigger_auto_save handle deletion)
+                if not auto:
                     QMessageBox.warning(self, "No ROIs", "No ROIs to save.")
                 return
 
@@ -812,6 +843,40 @@ class ROITab(QWidget):
         try:
             roi_data = []
             
+            # If using ROI Manager, get data from the table, not the layer
+            if self.roi_manager and hasattr(self.roi_manager, '_roilist'):
+                roi_list = self.roi_manager._roilist
+                if hasattr(roi_list, 'rowCount'):
+                    row_count = roi_list.rowCount()
+                    
+                    # Get ROI layer to access the actual shape data
+                    roi_layer = None
+                    for layer in self.viewer.layers:
+                        if type(layer).__name__ in ['RoiManagerLayer', 'Shapes']:
+                            roi_layer = layer
+                            break
+                    
+                    if roi_layer and hasattr(roi_layer, 'data'):
+                        # Only get ROIs that are in the table
+                        for row in range(row_count):
+                            try:
+                                # Get the shape index from the table
+                                # The table stores which shapes are managed
+                                if row < len(roi_layer.data):
+                                    shape = roi_layer.data[row]
+                                    roi_data.append({
+                                        'id': row + 1,  # Use 1-based indexing
+                                        'type': 'rectangle',
+                                        'vertices': shape.tolist() if hasattr(shape, 'tolist') else list(shape)
+                                    })
+                            except Exception:
+                                pass
+                    
+                    if roi_data and roi_layer:
+                        self.create_roi_image_layers(roi_data, roi_layer)
+                    return roi_data
+            
+            # Fallback: get from layer directly (for non-ROI Manager mode)
             for layer in self.viewer.layers:
                 if type(layer).__name__ in ['RoiManagerLayer', 'Shapes']:
                     if hasattr(layer, 'data') and len(layer.data) > 0:
@@ -1091,7 +1156,7 @@ class ROITab(QWidget):
         try:
             # If using ROI Manager, clear both visual layer and table, then add new shapes
             if self.roi_manager and hasattr(self.roi_manager, '_layer'):
-                self._clear_roi_manager_table(roi_layer)
+                self._clear_roi_manager_table()
                 self._sync_shapes_to_roi_manager(roi_layer, shapes_data)
             else:
                 # Fallback: clear and add all shapes at once
@@ -1101,30 +1166,6 @@ class ROITab(QWidget):
                     roi_layer.add_rectangles(shapes_data)
         except Exception as e:
             print(f"Error adding shapes to ROI layer: {e}")
-    
-    def _clear_roi_manager_table(self, roi_layer):
-        """Clear all ROIs from the ROI Manager table and layer."""
-        try:
-            from qtpy.QtWidgets import QApplication
-            
-            # If there are existing shapes, remove them all
-            if len(roi_layer.data) > 0:
-                # Select all shapes
-                roi_layer.selected_data = set(range(len(roi_layer.data)))
-                QApplication.processEvents()
-                
-                # Remove selected shapes
-                roi_layer.remove_selected()
-                QApplication.processEvents()
-                
-                print(f"Cleared ROI Manager table")
-        except Exception as e:
-            print(f"Error clearing ROI Manager table: {e}")
-            # Fallback: just clear the data
-            try:
-                roi_layer.data = []
-            except:
-                pass
     
     def _sync_shapes_to_roi_manager(self, roi_layer, shapes_data):
         """Sync shapes to the ROI Manager table by adding them one at a time and clicking Add button."""
