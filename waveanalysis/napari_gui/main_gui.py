@@ -253,6 +253,11 @@ class WaveAnalysisWidget(QWidget):
                                       "No current image selected. Please load an image first.")
                     return
             
+            # Check ROI data availability upfront if ROI Data checkbox is checked
+            if pre_params.get("analyze_roi_data", False):
+                if not self._validate_roi_data_availability(loaded_images, pre_params):
+                    return
+            
             main_results_dir = self._create_results_directory(loaded_images[0])
             all_image_results, all_files_processed = self._process_all_images(
                 loaded_images, params, pre_params, main_results_dir
@@ -278,6 +283,91 @@ class WaveAnalysisWidget(QWidget):
             return False
         
         return True
+    
+    def _validate_roi_data_availability(self, loaded_images, pre_params):
+        """Check ROI data availability for all images before starting analysis.
+        Uses the already-loaded ROI data from roi_tab.per_image_rois."""
+        
+        missing_roi_images = []
+        empty_roi_images = []
+        
+        # Check all images for ROI data using the already-loaded per_image_rois
+        for image_path in loaded_images:
+            image_name = os.path.basename(image_path)
+            
+            # Check if image has ROI data in the roi_tab's cache
+            if image_path not in self.roi_tab.per_image_rois:
+                missing_roi_images.append(image_name)
+            else:
+                # Check if the loaded ROI data is empty
+                roi_data = self.roi_tab.per_image_rois[image_path]
+                if not roi_data or len(roi_data) == 0:
+                    empty_roi_images.append(image_name)
+        
+        # If all images have valid ROI data, proceed
+        if not missing_roi_images and not empty_roi_images:
+            return True
+        
+        # Build error message for status label
+        problem_count = len(missing_roi_images) + len(empty_roi_images)
+        status_msg = f"ROI Data Issue: {problem_count} image(s) missing or have empty ROI data"
+        self.roi_tab.status_label.setText(status_msg)
+        
+        # Build detailed message for dialog
+        dialog_msg = "The following images have ROI data issues:\n\n"
+        
+        if missing_roi_images:
+            dialog_msg += f"Missing ROI files ({len(missing_roi_images)}):" + "\n"
+            for img in missing_roi_images[:5]:  # Show first 5
+                dialog_msg += f"  • {img}\n"
+            if len(missing_roi_images) > 5:
+                dialog_msg += f"  ... and {len(missing_roi_images) - 5} more\n"
+            dialog_msg += "\n"
+        
+        if empty_roi_images:
+            dialog_msg += f"Empty ROI data ({len(empty_roi_images)}):" + "\n"
+            for img in empty_roi_images[:5]:  # Show first 5
+                dialog_msg += f"  • {img}\n"
+            if len(empty_roi_images) > 5:
+                dialog_msg += f"  ... and {len(empty_roi_images) - 5} more\n"
+            dialog_msg += "\n"
+        
+        dialog_msg += "\nWhat would you like to do?"
+        
+        # Show dialog with options
+        reply = QMessageBox.question(
+            self,
+            "ROI Data Issues",
+            dialog_msg,
+            QMessageBox.Abort | QMessageBox.Ignore,
+            QMessageBox.Abort
+        )
+        
+        if reply == QMessageBox.Abort:
+            self.roi_tab.status_label.setText("Status: Analysis aborted due to ROI data issues")
+            return False
+        else:
+            # User chose to skip problematic images
+            self.roi_tab.status_label.setText(f"Status: Skipping {problem_count} image(s) with ROI issues")
+            
+            # Remove problematic images from loaded_images list
+            problem_images = set(missing_roi_images + empty_roi_images)
+            loaded_images[:] = [
+                img for img in loaded_images 
+                if os.path.basename(img) not in problem_images
+            ]
+            
+            # Check if any images remain
+            if not loaded_images:
+                QMessageBox.warning(
+                    self,
+                    "No Images to Process",
+                    "All images have ROI data issues. No analysis will be performed."
+                )
+                self.roi_tab.status_label.setText("Status: No valid images to analyze")
+                return False
+            
+            return True
 
     def _create_results_directory(self, first_image_path):
         """Create main results directory."""
@@ -295,9 +385,6 @@ class WaveAnalysisWidget(QWidget):
         for image_path in loaded_images:
             image_rois = self.get_active_rois(image_path)
             
-            if not self._check_roi_availability(image_path, image_rois, pre_params):
-                continue
-            
             try:
                 image_results = self._process_single_image(
                     image_path, params, pre_params, main_results_dir, image_rois
@@ -313,28 +400,6 @@ class WaveAnalysisWidget(QWidget):
                 self._handle_image_processing_error(e, image_path)
         
         return all_image_results, all_files_processed
-
-    def _check_roi_availability(self, image_path, image_rois, pre_params):
-        """Check if ROIs are available when needed and prompt user."""
-        analyze_roi_data = pre_params.get("analyze_roi_data", False)
-        analyze_whole_image = pre_params.get("analyze_whole_image", False)
-        
-        if analyze_roi_data and not analyze_whole_image and not image_rois:
-            reply = QMessageBox.question(
-                self, 
-                "No ROIs Found", 
-                f"No ROIs found for {os.path.basename(image_path)}.\n\n"
-                f"Do you want to continue processing this image with whole image analysis?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes
-            )
-            
-            if reply == QMessageBox.No:
-                return False
-            else:
-                pre_params["analyze_whole_image"] = True
-        
-        return True
 
     def _process_single_image(self, image_path, params, pre_params, main_results_dir, image_rois):
         """Process a single image and return results."""
