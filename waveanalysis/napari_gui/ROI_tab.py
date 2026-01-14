@@ -124,7 +124,7 @@ class ROITab(QWidget):
         self.auto_save_check.setEnabled(False)
         
         self.show_labels_check = QCheckBox("Show ROI Labels")
-        self.show_labels_check.setChecked(False)
+        self.show_labels_check.setChecked(True)  # Default to checked to match ROI Manager behavior
         self.show_labels_check.setEnabled(False)
         self.show_labels_check.stateChanged.connect(self.toggle_roi_labels)
         
@@ -209,9 +209,46 @@ class ROITab(QWidget):
 
     def _get_roi_manager_layer(self):
         """Get the ROI layer created by the ROI Manager and connect to table changes."""
+        print("\n" + "="*60)
+        print("DEBUG: _get_roi_manager_layer() CALLED")
+        print("="*60 + "\n")
+        import sys
+        sys.stdout.flush()
+        
         try:
             if self.roi_manager and hasattr(self.roi_manager, '_layer'):
+                print(f"DEBUG: ROI Manager has _layer attribute")
+                sys.stdout.flush()
                 self.roi_layer = self.roi_manager._layer
+                
+                # Synchronize the layer's text property with the checkbox state
+                if hasattr(self.roi_layer, 'text'):
+                    if self.show_labels_check.isChecked():
+                        # If checkbox is checked, ensure labels are shown
+                        if len(self.roi_layer.data) > 0:
+                            QTimer.singleShot(100, self.update_roi_labels)
+                    else:
+                        # If checkbox is unchecked, hide labels
+                        self.roi_layer.text = ''
+                
+                # Connect to text property changes to reactively enforce checkbox state
+                if hasattr(self.roi_layer, 'events') and hasattr(self.roi_layer.events, 'text'):
+                    self.roi_layer.events.text.connect(self._on_layer_text_changed)
+                    print(f"✓ Connected to layer text events for reactive label enforcement")
+                    print(f"  Layer type: {type(self.roi_layer)}")
+                    print(f"  Has text attr: {hasattr(self.roi_layer, 'text')}")
+                    print(f"  Current text: {self.roi_layer.text}")
+                else:
+                    print(f"✗ FAILED to connect to text events!")
+                    print(f"  Has events: {hasattr(self.roi_layer, 'events')}")
+                    if hasattr(self.roi_layer, 'events'):
+                        print(f"  Has events.text: {hasattr(self.roi_layer.events, 'text')}")
+                        print(f"  Events dir: {[x for x in dir(self.roi_layer.events) if not x.startswith('_')]}")
+                
+                # Start a polling timer to detect text changes that don't trigger events
+                self.text_monitor_timer = QTimer()
+                self.text_monitor_timer.timeout.connect(self._poll_text_property)
+                self.text_monitor_timer.start(10)  # Check every 10ms for minimal latency
                 
                 # First, inspect the ROI Manager structure
                 self._inspect_roi_manager()
@@ -265,56 +302,27 @@ class ROITab(QWidget):
     def _inspect_roi_manager(self):
         """Inspect ROI Manager structure to find available widgets and signals."""
         try:
-            print("\n=== ROI Manager Inspection ===")
-            print(f"ROI Manager type: {type(self.roi_manager).__name__}")
-            
-            # List all attributes including private ones
-            print("\nAll ROI Manager attributes (including private):")
-            for attr in dir(self.roi_manager):
-                if not callable(getattr(self.roi_manager, attr, None)):
-                    try:
-                        value = getattr(self.roi_manager, attr)
-                        print(f"  {attr}: {type(value).__name__}")
-                    except:
-                        pass
-            
-            # Check all child widgets of any type
-            print("\nAll child QWidget descendants:")
-            from qtpy.QtWidgets import QWidget
-            for child in self.roi_manager.findChildren(QWidget):
-                widget_type = type(child).__name__
-                obj_name = child.objectName() if child.objectName() else "(no name)"
-                print(f"  {widget_type}: {obj_name}")
+            # Connect to ROI Manager table changes for auto-save
+            if hasattr(self.roi_manager, '_roilist'):
+                roi_list = self.roi_manager._roilist
                 
-                # Check if this widget has count() method (lists/tables)
-                if hasattr(child, 'count'):
-                    try:
-                        count = child.count()
-                        print(f"    -> Has count() method: {count} items")
-                    except:
-                        pass
-                
-                # Check for rowCount (tables)
-                if hasattr(child, 'rowCount'):
-                    try:
-                        rows = child.rowCount()
-                        print(f"    -> Has rowCount() method: {rows} rows")
-                    except:
-                        pass
-            
-            # Check all buttons
-            print("\nAll buttons:")
-            from qtpy.QtWidgets import QPushButton, QAbstractButton
-            for btn in self.roi_manager.findChildren(QAbstractButton):
-                btn_text = btn.text() if hasattr(btn, 'text') else ""
-                print(f"  {type(btn).__name__}: '{btn_text}'")
-                
-            print("=== End Inspection ===\n")
-            
+                # Connect to table model signals
+                if hasattr(roi_list, 'model') and roi_list.model():
+                    model = roi_list.model()
+                    
+                    # Connect to row insertion, removal, and data change events
+                    if hasattr(model, 'rowsInserted'):
+                        model.rowsInserted.connect(self.on_roi_table_changed)
+                    if hasattr(model, 'rowsRemoved'):
+                        model.rowsRemoved.connect(self.on_roi_table_changed)
+                    if hasattr(model, 'dataChanged'):
+                        model.dataChanged.connect(self.on_roi_table_changed)
+                    
+                    # Initialize count tracking
+                    self.previous_roi_count = roi_list.rowCount() if hasattr(roi_list, 'rowCount') else 0
+                    
         except Exception as e:
-            print(f"Error inspecting ROI Manager: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"Error connecting to ROI Manager: {e}")
     
     def create_fallback_roi_layer(self):
         """Create a fallback ROI layer."""
@@ -371,6 +379,9 @@ class ROITab(QWidget):
     def check_roi_count_changed(self):
         """Periodically check if ROI count changed (backup method for detecting changes)."""
         try:
+            # Always enforce label checkbox state regardless of auto-save
+            self._enforce_label_checkbox_state()
+            
             # Only check if auto-save is enabled, not currently saving, and not switching images
             if not (hasattr(self, 'auto_save_check') and self.auto_save_check.isChecked()):
                 return
@@ -565,6 +576,17 @@ class ROITab(QWidget):
                 self.previous_roi_count = len(self.roi_layer.data)
             else:
                 self.previous_roi_count = 0
+            
+            # Ensure text property matches checkbox state after loading ROIs
+            if self.roi_layer and hasattr(self.roi_layer, 'text'):
+                if self.show_labels_check.isChecked() and len(self.roi_layer.data) > 0:
+                    QTimer.singleShot(100, self.update_roi_labels)
+                else:
+                    # Hide immediately, then use delayed enforcements as backup
+                    self.roi_layer.text = ''
+                    QTimer.singleShot(50, self._do_enforce_label_state)
+                    QTimer.singleShot(150, self._do_enforce_label_state)
+                    QTimer.singleShot(300, self._do_enforce_label_state)
             
             self.update_roi_scope_label()
             
@@ -982,10 +1004,52 @@ class ROITab(QWidget):
                 return
             
             if self.show_labels_check.isChecked():
-                roi_layer.text = self._get_text_properties()
+                # Show labels
+                if hasattr(roi_layer.text, 'visible'):
+                    roi_layer.text.visible = True
+                    roi_layer.refresh()
+                else:
+                    roi_layer.text = self._get_text_properties()
             else:
-                roi_layer.text = ''
-        except Exception:
+                # Hide labels
+                if hasattr(roi_layer.text, 'visible'):
+                    roi_layer.text.visible = False
+                    roi_layer.refresh()
+        except Exception as e:
+            print(f"Error in toggle_roi_labels: {e}")
+
+    def _poll_text_property(self):
+        """Poll the text property to detect changes that don't trigger events."""
+        try:
+            roi_layer = self._find_roi_layer()
+            if not roi_layer or not hasattr(roi_layer, 'text'):
+                return
+            
+            # If checkbox is unchecked, ensure text is not visible
+            if not self.show_labels_check.isChecked():
+                current_text = roi_layer.text
+                
+                # Check if text has visible attribute and if it's True
+                if hasattr(current_text, 'visible'):
+                    if current_text.visible:
+                        current_text.visible = False
+                        roi_layer.refresh()  # Refresh the layer to apply changes
+        except Exception as e:
+            print(f"Error in _poll_text_property: {e}")
+
+    def _do_enforce_label_state(self):
+        """Actually enforce the label state."""
+        try:
+            roi_layer = self._find_roi_layer()
+            if not roi_layer or not hasattr(roi_layer, 'text'):
+                return
+            
+            # If checkbox is unchecked, hide text
+            if not self.show_labels_check.isChecked():
+                if hasattr(roi_layer.text, 'visible'):
+                    roi_layer.text.visible = False
+                    roi_layer.refresh()
+        except Exception as e:
             pass
     
     def update_roi_labels(self):
@@ -1142,6 +1206,13 @@ class ROITab(QWidget):
                     self.status_label.setText(f"Status: Loaded {len(shapes_data)} ROIs for {image_name}")
                 else:
                     self.status_label.setText(f"Status: Ready to draw ROIs for {image_name}")
+                
+                # Ensure text property matches checkbox state
+                if hasattr(self.roi_layer, 'text'):
+                    if not self.show_labels_check.isChecked():
+                        if hasattr(self.roi_layer.text, 'visible'):
+                            self.roi_layer.text.visible = False
+                        self.roi_layer.text = ''
             else:
                 # Fallback: create our own shapes layer
                 text_properties = self._get_text_properties() if self.show_labels_check.isChecked() else None
@@ -1207,24 +1278,46 @@ class ROITab(QWidget):
             self.viewer.layers.selection.active = roi_layer
             QApplication.processEvents()
             
+            # Track if we need to suppress labels
+            suppress_labels = not self.show_labels_check.isChecked()
+            
             # Add shapes one at a time and register each with the ROI Manager
             for i, shape in enumerate(shapes_data):
                 # Add single rectangle
                 roi_layer.add_rectangles([shape])
                 QApplication.processEvents()
+                # Immediately hide text if labels should be suppressed
+                if suppress_labels and hasattr(roi_layer, 'text'):
+                    if hasattr(roi_layer.text, 'visible'):
+                        roi_layer.text.visible = False
+                    roi_layer.text = ''
                 
                 # Select the newly added shape
                 new_index = len(roi_layer.data) - 1
                 roi_layer.selected_data = {new_index}
                 QApplication.processEvents()
+                # Hide text again after selection
+                if suppress_labels and hasattr(roi_layer, 'text'):
+                    if hasattr(roi_layer.text, 'visible'):
+                        roi_layer.text.visible = False
+                    roi_layer.text = ''
                 
                 # Click the Add button to register it in the ROI Manager table
                 add_btn.click()
                 QApplication.processEvents()
+                # Hide text once more after Add
+                if suppress_labels and hasattr(roi_layer, 'text'):
+                    if hasattr(roi_layer.text, 'visible'):
+                        roi_layer.text.visible = False
+                    roi_layer.text = ''
             
             # Clear selection after all shapes are added
             roi_layer.selected_data = set()
             print(f"Successfully synced {len(shapes_data)} ROIs to ROI Manager table")
+            
+            # Update labels based on checkbox state (reactive handler will manage text clearing)
+            if self.show_labels_check.isChecked():
+                QTimer.singleShot(100, self.update_roi_labels)
             
         except Exception as e:
             print(f"Error syncing to ROI Manager: {e}")
@@ -1253,6 +1346,11 @@ class ROITab(QWidget):
                 if len(roi_layer.data) > 0:
                     roi_layer.data = []
                 self.status_label.setText(f"Status: Ready to draw ROIs for {image_name}")
+            
+            # Ensure text property matches checkbox state after loading
+            if hasattr(roi_layer, 'text'):
+                if not self.show_labels_check.isChecked():
+                    roi_layer.text = ''
             
             roi_layer.visible = True
             
