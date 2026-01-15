@@ -61,9 +61,18 @@ class ROITab(QWidget):
         self.setup_instructions.setWordWrap(True)
         setup_layout.addWidget(self.setup_instructions)
         
+        # Button row for Initialize and Close
+        setup_btn_row = QHBoxLayout()
         self.init_roi_btn = QPushButton("Initialize ROI Manager")
         self.init_roi_btn.clicked.connect(self.initialize_roi_manager)
-        setup_layout.addWidget(self.init_roi_btn)
+        setup_btn_row.addWidget(self.init_roi_btn)
+        
+        self.close_roi_btn = QPushButton("Close ROI Manager")
+        self.close_roi_btn.clicked.connect(self.close_roi_manager)
+        self.close_roi_btn.setEnabled(False)
+        setup_btn_row.addWidget(self.close_roi_btn)
+        
+        setup_layout.addLayout(setup_btn_row)
         
         setup_group.setLayout(setup_layout)
         layout.addWidget(setup_group)
@@ -182,6 +191,7 @@ class ROITab(QWidget):
             self.parent.update_status("Status: ROI Manager initialized")
             self.init_roi_btn.setText("ROI Manager Initialized")
             self.init_roi_btn.setEnabled(False)
+            self.close_roi_btn.setEnabled(True)
             self.roi_manager_initialized = True
             
             # Get the ROI Manager's layer after a brief delay to ensure it's created
@@ -194,6 +204,57 @@ class ROITab(QWidget):
             self.parent.update_status(f"Status: ROI Manager error - {str(e)} (using fallback mode)")
             self.fallback_container.setVisible(True)
             self.roi_manager_container.setVisible(False)
+
+    def close_roi_manager(self):
+        """Close the ROI Manager and reset to initial state."""
+        if not self.roi_manager_initialized:
+            return
+        
+        try:
+            # Stop monitoring timers
+            if hasattr(self, 'text_monitor_timer') and self.text_monitor_timer:
+                self.text_monitor_timer.stop()
+                self.text_monitor_timer = None
+            
+            if hasattr(self, 'roi_count_monitor_timer') and self.roi_count_monitor_timer:
+                self.roi_count_monitor_timer.stop()
+                self.roi_count_monitor_timer = None
+            
+            if hasattr(self, 'auto_save_timer') and self.auto_save_timer:
+                self.auto_save_timer.stop()
+                self.auto_save_timer = None
+            
+            # Clean up ROI layers from viewer
+            self._cleanup_existing_roi_layers()
+            
+            # Clear and hide ROI Manager container
+            self.roi_manager_container.setWidget(None)
+            self.roi_manager_container.setVisible(False)
+            
+            # Clean up ROI Manager reference
+            self.roi_manager = None
+            self.roi_layer = None
+            
+            # Disable operations
+            self._enable_operations(False)
+            
+            # Reset buttons to initial state
+            self.init_roi_btn.setText("Initialize ROI Manager")
+            self.init_roi_btn.setEnabled(True)
+            self.close_roi_btn.setEnabled(False)
+            
+            # Reset state flags
+            self.roi_manager_initialized = False
+            self.previous_roi_count = 0
+            self.is_drawing = False
+            self.is_saving = False
+            self.is_switching_images = False
+            
+            # Update status
+            self.parent.update_status("Status: ROI Manager closed")
+            
+        except Exception as e:
+            self.parent.update_status(f"Status: Error closing ROI Manager - {str(e)}")
 
     def _get_roi_manager_layer(self):
         """Get the ROI layer created by the ROI Manager and connect to table changes."""
