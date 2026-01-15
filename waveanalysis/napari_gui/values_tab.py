@@ -7,6 +7,7 @@ from qtpy.QtWidgets import (
     QListWidget, QHBoxLayout
 )
 from qtpy.QtCore import Qt, Signal
+from .styles import BUTTON_STYLE
 
 class ValuesTab(QWidget):
     """
@@ -71,15 +72,27 @@ class ValuesTab(QWidget):
         
         # Buttons for image management
         button_layout = QHBoxLayout()
-        self.load_btn = QPushButton("Load Image/Movie")
+        button_layout.setSpacing(8)
+        
+        self.load_btn = QPushButton("Load")
         self.load_btn.clicked.connect(self.load_image)
-        self.remove_btn = QPushButton("Remove Selected")
+        self.load_btn.setToolTip("Load image or movie files")
+        self.load_btn.setStyleSheet(BUTTON_STYLE)
+        
+        self.remove_btn = QPushButton("Remove")
         self.remove_btn.clicked.connect(self.remove_image)
+        self.remove_btn.setToolTip("Remove selected image from list")
+        self.remove_btn.setStyleSheet(BUTTON_STYLE)
+        
         self.clear_all_btn = QPushButton("Clear All")
         self.clear_all_btn.clicked.connect(self.clear_all_images)
+        self.clear_all_btn.setToolTip("Clear all loaded images")
+        self.clear_all_btn.setStyleSheet(BUTTON_STYLE)
+        
         self.reset_btn = QPushButton("Reset")
         self.reset_btn.clicked.connect(self.request_reset)
         self.reset_btn.setToolTip("Reset the application to its initial state")
+        self.reset_btn.setStyleSheet(BUTTON_STYLE)
         
         button_layout.addWidget(self.load_btn)
         button_layout.addWidget(self.remove_btn)

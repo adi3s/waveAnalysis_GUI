@@ -8,6 +8,7 @@ from qtpy.QtWidgets import (
 )
 from magicgui import magicgui
 from qtpy.QtCore import Signal, Qt
+from .styles import BUTTON_STYLE
 
 class PreProcessingTab(QWidget):
     """Tab for preprocessing options"""
@@ -72,8 +73,9 @@ class PreProcessingTab(QWidget):
         self.smooth_order.setRange(1, 5)
         self.smooth_order.setValue(2)
 
-        # Analyze button
+        # Analyze button with global style
         self.analyze = QPushButton("Analyze")
+        self.analyze.setStyleSheet(BUTTON_STYLE)
         
         # Group box for plot options
         plots_group = QGroupBox("Plot Generation Options")
