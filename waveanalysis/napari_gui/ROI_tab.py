@@ -68,14 +68,7 @@ class ROITab(QWidget):
         setup_group.setLayout(setup_layout)
         layout.addWidget(setup_group)
         
-        # ROI Manager container
-        self.roi_manager_container = QScrollArea()
-        self.roi_manager_container.setWidgetResizable(True)
-        self.roi_manager_container.setMaximumHeight(300)
-        self.roi_manager_container.setVisible(False)
-        layout.addWidget(self.roi_manager_container)
-        
-        # Operations group
+        # Operations group (placed before ROI Manager table for better visibility)
         roi_ops_group = QGroupBox("ROI Operations")
         roi_ops_layout = QVBoxLayout()
         
@@ -126,6 +119,13 @@ class ROITab(QWidget):
         
         roi_ops_group.setLayout(roi_ops_layout)
         layout.addWidget(roi_ops_group)
+        
+        # ROI Manager container (table) - placed after operations for better layout
+        self.roi_manager_container = QScrollArea()
+        self.roi_manager_container.setWidgetResizable(True)
+        self.roi_manager_container.setMaximumHeight(300)
+        self.roi_manager_container.setVisible(False)
+        layout.addWidget(self.roi_manager_container)
         
         # Fallback container
         self.fallback_container = QWidget()
