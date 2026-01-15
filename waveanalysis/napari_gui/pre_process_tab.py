@@ -338,3 +338,34 @@ class PreProcessingTab(QWidget):
             # Analysis scope
             "analyze_current_only": self.analyze_current_checkbox.isChecked()
         }
+
+    def reset_state(self):
+        """Reset all parameters to their default values."""
+        # Reset analysis type checkboxes
+        self.whole_image_checkbox.setChecked(True)
+        self.roi_data_checkbox.setChecked(False)
+        self.analyze_current_checkbox.setChecked(False)
+        
+        # Reset threshold and smoothing
+        self.threshold.setValue(0.5)
+        self.smooth_window.setValue(11)
+        self.smooth_order.setValue(2)
+        
+        # Reset summary plot options (standard/kymograph)
+        self.acf_checkbox.setChecked(True)
+        self.ccf_checkbox.setChecked(True)
+        self.peaks_checkbox.setChecked(True)
+        
+        # Reset individual plot options
+        self.indv_acf_checkbox.setChecked(False)
+        self.indv_ccf_checkbox.setChecked(False)
+        self.indv_peaks_checkbox.setChecked(False)
+        
+        # Reset rolling-specific plot options
+        self.period_checkbox.setChecked(True)
+        self.shift_checkbox.setChecked(True)
+        self.rolling_peaks_checkbox.setChecked(True)
+        
+        # Reset analysis type to standard
+        self.current_analysis_type = "standard"
+        self.set_analysis_type("standard")

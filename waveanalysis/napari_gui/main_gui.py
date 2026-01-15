@@ -147,6 +147,7 @@ class WaveAnalysisWidget(QWidget):
         self.values_tab.image_loaded.connect(self.handle_new_image)
         self.values_tab.images_updated.connect(self.handle_images_updated)
         self.values_tab.analysis_type_changed.connect(self.pre_process_tab.set_analysis_type)
+        self.values_tab.reset_requested.connect(self.handle_global_reset)
         self.roi_tab.roi_saved.connect(self.handle_new_roi)
         self.roi_tab.roi_updated.connect(self.process_roi)
         self.pre_process_tab.analyze.clicked.connect(self.run_analysis)
@@ -154,6 +155,51 @@ class WaveAnalysisWidget(QWidget):
     def update_status(self, message):
         """Update the global status panel with a new message."""
         self.status_panel.setPlainText(message)
+
+    def handle_global_reset(self):
+        """Reset the entire application to its initial state."""
+        try:
+            # Close ROI Manager if initialized
+            if hasattr(self, 'roi_tab') and self.roi_tab.roi_manager_initialized:
+                self.roi_tab.close_roi_manager()
+            
+            # Clear all image layers from viewer
+            self._clear_previous_image_layers()
+            
+            # Reset Values tab (keeps last_directory)
+            if hasattr(self, 'values_tab'):
+                self.values_tab.reset_state()
+            
+            # Reset Pre-Processing tab parameters to defaults
+            if hasattr(self, 'pre_process_tab'):
+                self.pre_process_tab.reset_state()
+            
+            # Reset ROI tab state (already handled by close_roi_manager, but reset other state)
+            if hasattr(self, 'roi_tab'):
+                self.roi_tab.per_image_rois.clear()
+                self.roi_tab.current_image_path = None
+                self.roi_tab.loaded_images.clear()
+            
+            # Reset post-processing tab
+            if hasattr(self, 'post_process_tab'):
+                self.post_process_tab.reset_state()
+            
+            # Reset internal state
+            self.current_image_path = None
+            self.current_image = None
+            self.crops = []
+            
+            # Reset log_params to initial state (with all required keys)
+            self.log_params = self._initialize_log_params()
+            
+            # Switch to Values tab
+            self.tabs.setCurrentIndex(0)
+            
+            # Update status
+            self.update_status("Status: Application reset - Ready")
+            
+        except Exception as e:
+            self.update_status(f"Status: Reset error - {str(e)}")
 
     def _create_scrollable_tab(self, tab_widget):
         """Create a scrollable wrapper for a tab widget."""

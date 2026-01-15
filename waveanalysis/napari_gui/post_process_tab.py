@@ -240,6 +240,68 @@ class PostProcessingTab(QWidget):
         """Set the list of loaded images for multi-image analysis display"""
         self.loaded_images = image_list if image_list else []
 
+    def reset_state(self):
+        """Reset this tab to its initial state."""
+        # Clear all displayed plots
+        while self.results_layout.count():
+            item = self.results_layout.takeAt(0)
+            if item.widget():
+                widget = item.widget()
+                widget.setParent(None)
+                widget.deleteLater()
+        
+        # Clear stored references
+        self.canvases.clear()
+        self.cached_figures.clear()
+        
+        # Reset results data
+        self.results_dir = None
+        self.results = None
+        self.params = None
+        self.loaded_images = []
+        self.loaded_image_names = []
+        
+        # Reset plot preferences to defaults
+        self.plot_preferences = {
+            "plot_summary_acfs": True,
+            "plot_summary_ccfs": True,
+            "plot_summary_peaks": True,
+            "plot_indv_acfs": False,
+            "plot_indv_ccfs": False,
+            "plot_indv_peaks": False
+        }
+        
+        # Reset analysis scope
+        self.analysis_scope = {
+            "analyze_whole_image": False,
+            "analyze_roi_data": False
+        }
+        
+        # Reset image filter dropdown
+        self.image_filter_combo.blockSignals(True)
+        self.image_filter_combo.clear()
+        self.image_filter_combo.addItem("Show All Images")
+        self.image_filter_combo.blockSignals(False)
+        self.image_filter_widget.setVisible(False)
+        
+        # Reset display combo to defaults
+        self.display_combo.blockSignals(True)
+        self.display_combo.clear()
+        self.display_combo.addItem("Summary")
+        self.display_combo.addItem("ACF Plots")
+        self.display_combo.addItem("CCF Plots")
+        self.display_combo.addItem("Peak Properties")
+        self.display_combo.addItem("ROI Statistics")
+        self.display_combo.setCurrentIndex(0)
+        self.display_combo.blockSignals(False)
+        
+        # Disable save button
+        self.save_indv_plots_btn.setEnabled(False)
+        
+        # Hide ROI grid checkbox
+        if hasattr(self, 'show_roi_grid_checkbox'):
+            self.show_roi_grid_checkbox.setVisible(False)
+
     def set_loaded_image_names(self, image_names):
         """Set the list of loaded image names (without extension) for labeling"""
         self.loaded_image_names = image_names if image_names else []

@@ -18,6 +18,7 @@ class ValuesTab(QWidget):
     image_loaded = Signal(str)  # Signal to notify when an image is loaded
     images_updated = Signal(list)  # Signal to notify when image list changes
     analysis_type_changed = Signal(str)  # Signal to notify when analysis type changes
+    reset_requested = Signal()  # Signal to request global app reset
 
     def __init__(self, parent):
         """Initialize the ValuesTab with the parent widget"""
@@ -25,6 +26,7 @@ class ValuesTab(QWidget):
         self.parent = parent
         self.image_files = []  # Store list of loaded image files
         self.current_image_path = None
+        self.last_directory = ""  # Remember last used directory for file dialogs
         self.init_ui()
         self.setup_parameter_groups()
         self.update_visible_params()
@@ -75,10 +77,14 @@ class ValuesTab(QWidget):
         self.remove_btn.clicked.connect(self.remove_image)
         self.clear_all_btn = QPushButton("Clear All")
         self.clear_all_btn.clicked.connect(self.clear_all_images)
+        self.reset_btn = QPushButton("Reset")
+        self.reset_btn.clicked.connect(self.request_reset)
+        self.reset_btn.setToolTip("Reset the application to its initial state")
         
         button_layout.addWidget(self.load_btn)
         button_layout.addWidget(self.remove_btn)
         button_layout.addWidget(self.clear_all_btn)
+        button_layout.addWidget(self.reset_btn)
         load_layout.addLayout(button_layout)
         
         # Movie info label
@@ -115,11 +121,14 @@ class ValuesTab(QWidget):
     def load_image(self):
         """Load one or more image/movie files and add them to the list"""
         file_paths, _ = QFileDialog.getOpenFileNames(
-            self, "Open Image/Movie(s)", "", 
+            self, "Open Image/Movie(s)", self.last_directory, 
             "Image/Movie files (*.tif *.tiff *.png *.jpg *.jpeg *.lsm)"
         )
         
         if file_paths:
+            # Save the directory of the first selected file
+            self.last_directory = os.path.dirname(file_paths[0])
+            
             # Track newly added files
             newly_added = []
             
@@ -183,6 +192,47 @@ class ValuesTab(QWidget):
         self.image_files.clear()
         self.image_list.clear()
         self.current_image_path = None
+        self.images_updated.emit(self.image_files.copy())
+
+    def request_reset(self):
+        """Request a global app reset, preserving last directory."""
+        self.reset_requested.emit()
+
+    def reset_state(self):
+        """Reset this tab to its initial state, preserving last_directory."""
+        # Clear images (but keep last_directory)
+        self.image_files.clear()
+        self.image_list.clear()
+        self.current_image_path = None
+        
+        # Reset analysis type to default (Standard)
+        self.analysis_combo.setCurrentIndex(0)
+        
+        # Reset Standard parameters
+        self.std_box_size.setValue(20)
+        self.std_bin_shift.setValue(20)
+        self.std_preview_check.setChecked(False)
+        
+        # Reset Rolling parameters
+        self.roll_box_size.setValue(20)
+        self.roll_bin_shift.setValue(20)
+        self.roll_sub_size.setValue(50)
+        self.roll_sub_shift.setValue(5)
+        self.roll_preview_check.setChecked(False)
+        
+        # Reset Kymograph parameters
+        self.kymo_line_width.setValue(5)
+        self.kymo_bin_shift.setValue(5)
+        self.calc_speed.setChecked(False)
+        self.kymo_preview_check.setChecked(False)
+        
+        # Reset Common parameters
+        self.group_names.clear()
+        
+        # Update visibility
+        self.update_visible_params()
+        
+        # Emit update signal
         self.images_updated.emit(self.image_files.copy())
 
     def get_loaded_images(self):
