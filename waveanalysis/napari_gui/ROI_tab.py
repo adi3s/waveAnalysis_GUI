@@ -132,7 +132,8 @@ class ROITab(QWidget):
         # ROI Manager container (table) - placed after operations for better layout
         self.roi_manager_container = QScrollArea()
         self.roi_manager_container.setWidgetResizable(True)
-        self.roi_manager_container.setMaximumHeight(300)
+        self.roi_manager_container.setMinimumHeight(250)
+        self.roi_manager_container.setMaximumHeight(450)
         self.roi_manager_container.setVisible(False)
         layout.addWidget(self.roi_manager_container)
         
@@ -180,6 +181,7 @@ class ROITab(QWidget):
             
             container_widget = QWidget()
             container_layout = QVBoxLayout()
+            container_layout.setContentsMargins(0, 0, 0, 0)
             container_layout.addWidget(self.roi_manager)
             container_widget.setLayout(container_layout)
             
